@@ -769,9 +769,14 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
             </div>
 
             <div className="flex items-center gap-3 text-xs text-slate-200">
-              <button className="px-2 py-1 rounded-md border border-slate-700 bg-slate-900 text-[11px]">
-                Dark / Light (soon)
-              </button>
+              
+              <button
+                className="px-3 py-1 rounded-full border border-slate-600 text-xs text-slate-300 cursor-not-allowed opacity-60"
+                    disabled
+                >
+                   Dark mode
+                </button>
+
               {userEmail && (
                 <span className="px-2 py-1 rounded-full bg-slate-900 border border-slate-700">
                   {userEmail}
@@ -1212,7 +1217,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
 
             {/* Budgets */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-3">
-              <h3 className="font-medium mb-1 text-xs">Budgets (per month)</h3>
+              <h3 className="font-medium mb-1 text-xs">Budgets (Monthly)</h3>
               <p className="text-slate-400 mb-2">
                 Set a simple limit for your key categories. We&apos;ll show how
                 much you&apos;ve used so far.
