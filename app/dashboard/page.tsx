@@ -1057,7 +1057,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
 
                 {transactions.length === 0 ? (
                   <p className="text-xs text-slate-300">
-                    No transactions yet in the last {windowdays} days.
+                    No transactions yet in the last {windowDays} days.
                   </p>
                 ) : (
                   <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1">
