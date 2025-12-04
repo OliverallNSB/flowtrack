@@ -79,7 +79,7 @@ export default function LoginPage() {
             Welcome back
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Log in to your MoneyControl dashboard.
+            Log in to your FlowTrack dashboard.
           </p>
         </header>
 
