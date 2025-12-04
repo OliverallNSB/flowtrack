@@ -1,111 +1,124 @@
+// app/context/AuthContext.tsx
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  ReactNode,
+} from "react";
 import { supabase } from "@/lib/supabaseclient";
-import type { User } from "@supabase/supabase-js";
 
-type AppUser = {
+type SimpleUser = {
   id: string;
-  email: string;
-  plan: "free" | "pro";
-  created_at?: string;
-};
+  email: string | null;
+} | null;
 
-type AuthContextValue = {
-  user: User | null;
-  profile: AppUser | null;
+type Profile = {
+  id: string;
+  email: string | null;
+  plan: "free" | "pro";
+} | null;
+
+type AuthContextType = {
+  user: SimpleUser;
+  profile: Profile;
   loading: boolean;
 };
 
-const AuthContext = createContext<AuthContextValue>({
-  user: null,
-  profile: null,
-  loading: true,
-});
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<AppUser | null>(null);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<SimpleUser>(null);
+  const [profile, setProfile] = useState<Profile>(null);
   const [loading, setLoading] = useState(true);
 
-  const loadUserProfile = async (authUser: User | null) => {
-  if (!authUser) {
-    setProfile(null);
-    return;
-  }
+  useEffect(() => {
+    let cancelled = false;
 
-  // 1) Try to load existing row from "users"
-  const { data, error } = await supabase
-    .from("users")
-    .select("*")
-    .eq("id", authUser.id)
-    .maybeSingle(); // allows 0 or 1 row without throwing
+    async function loadAuth() {
+      try {
+        // 1) Get Supabase session
+        const { data, error } = await supabase.auth.getSession();
 
-  if (error) {
-    console.error("Error loading user profile:", error);
-    setProfile(null);
-    return;
-  }
+        if (cancelled) return;
 
-  // 2) If no row exists yet, create a default one (plan = "free")
-  if (!data) {
-    const insertPayload = {
-      id: authUser.id,
-      email: authUser.email,
-      plan: "free" as const,
-    };
+        if (error) {
+          console.error("Error getting session:", error.message);
+          setUser(null);
+          setProfile(null);
+          return;
+        }
 
-    const { data: created, error: insertError } = await supabase
-      .from("users")
-      .insert(insertPayload)
-      .select()
-      .single();
+        const supaUser = data.session?.user ?? null;
 
-    if (insertError) {
-      console.error("Error creating user profile:", insertError);
-      setProfile(null);
-      return;
+        if (!supaUser) {
+          setUser(null);
+          setProfile(null);
+          return;
+        }
+
+        const simpleUser: SimpleUser = {
+          id: supaUser.id,
+          email: supaUser.email ?? null,
+        };
+
+        setUser(simpleUser);
+
+        // 2) Look up plan in public.users by email
+        let plan: "free" | "pro" = "free";
+        let profileEmail: string | null = supaUser.email ?? null;
+        let profileId: string = supaUser.id;
+
+        if (supaUser.email) {
+          const { data: userRow, error: userError } = await supabase
+            .from("users")
+            .select("id, email, plan")
+            .eq("email", supaUser.email)
+            .maybeSingle();
+
+          if (!cancelled) {
+            if (userError) {
+              console.warn("Could not load plan from users table:", userError.message);
+            } else if (userRow) {
+              profileId = userRow.id ?? supaUser.id;
+              profileEmail = userRow.email ?? supaUser.email;
+              if (
+                typeof userRow.plan === "string" &&
+                userRow.plan.toLowerCase() === "pro"
+              ) {
+                plan = "pro";
+              }
+            }
+          }
+        }
+
+        if (!cancelled) {
+          setProfile({
+            id: profileId,
+            email: profileEmail,
+            plan,
+          });
+        }
+      } catch (err) {
+        console.error("Unexpected auth error:", err);
+        if (!cancelled) {
+          setUser(null);
+          setProfile(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
     }
 
-    setProfile(created as AppUser);
-    return;
-  }
+    loadAuth();
 
-  // 3) Existing row found
-  setProfile(data as AppUser);
-};
-
-
-  useEffect(() => {
-    const init = async () => {
-      setLoading(true);
-
-      // Load auth session
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      const authUser = session?.user ?? null;
-      setUser(authUser);
-
-      // Load the user row from "users"
-      await loadUserProfile(authUser);
-
-      setLoading(false);
+    return () => {
+      cancelled = true;
     };
-
-    init();
-
-    // Listen for login/logout changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      const authUser = session?.user ?? null;
-      setUser(authUser);
-      loadUserProfile(authUser);
-    });
-
-    return () => subscription.unsubscribe();
   }, []);
 
   return (
@@ -115,4 +128,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export const useAuth = () => useContext(AuthContext);
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return ctx;
+}

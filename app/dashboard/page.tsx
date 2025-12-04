@@ -24,6 +24,26 @@ type Category = {
   type: TransactionType;
 };
 
+// ---- DEFAULTS & STORAGE KEYS ----
+
+const DEFAULT_CATEGORIES: Category[] = [
+  { name: "Rent / Mortgage", type: "expense" },
+  { name: "Groceries", type: "expense" },
+  { name: "Dining Out", type: "expense" },
+  { name: "Transportation", type: "expense" },
+  { name: "Utilities", type: "expense" },
+  { name: "Debt Payments", type: "expense" },
+  { name: "Subscriptions", type: "expense" },
+  { name: "Salary / Wages", type: "income" },
+  { name: "Side Income", type: "income" },
+];
+
+const DEFAULT_CATEGORY_BUDGETS: Record<string, number> = {};
+
+const CATEGORIES_STORAGE_KEY = "ft_categories_v1";
+const BUDGETS_STORAGE_KEY = "ft_category_budgets_v1";
+
+// ---- HELPERS ----
 function summarize(transactions: Transaction[]) {
   const income = transactions
     .filter((t) => t.type === "income")
@@ -54,40 +74,33 @@ function getSpendingRatio(income: number, expenses: number) {
 
 export default function DashboardPage() {
   const router = useRouter();
-  
-  
-const { user, profile, loading: authLoading } = useAuth();
+  const { user, profile, loading: authLoading } = useAuth();
 
-const isPro = profile?.plan === "pro";
+  const isPro = profile?.plan === "pro";
 
-// Date window depends on plan
-const windowDays = isPro ? 90 : 30; // Pro = 90 days, Free = 30
+  // Time window options depend on plan
+const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90] : [7, 14, 30];
 
+// User-selected time window (default: plan max)
+const [windowDays, setWindowDays] = useState<number>(isPro ? 90 : 30);
+
+// Date window based on selected days
 const today = new Date();
 const windowStart = new Date(today.getTime() - windowDays * 86400000);
 const todayStr = today.toISOString().slice(0, 10);
 const windowStartStr = windowStart.toISOString().slice(0, 10);
- 
 
-  // User & data
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+// User & data
+const [userEmail, setUserEmail] = useState<string | null>(null);
+const [userId, setUserId] = useState<string | null>(null);
+const [transactions, setTransactions] = useState<Transaction[]>([]);
+const [loading, setLoading] = useState(true);
+const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Categories
-  const [categories, setCategories] = useState<Category[]>([
-    { name: "Rent / Mortgage", type: "expense" },
-    { name: "Groceries", type: "expense" },
-    { name: "Dining Out", type: "expense" },
-    { name: "Transportation", type: "expense" },
-    { name: "Utilities", type: "expense" },
-    { name: "Debt Payments", type: "expense" },
-    { name: "Subscriptions", type: "expense" },
-    { name: "Salary / Wages", type: "income" },
-    { name: "Side Income", type: "income" },
-  ]);
+  const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
+
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryType, setNewCategoryType] =
     useState<TransactionType>("expense");
@@ -115,15 +128,164 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
   const [quickSaving, setQuickSaving] = useState(false);
 
   // Simple budgets per category (local-only for now)
-  const [categoryBudgets, setCategoryBudgets] = useState<Record<string, number>>({
-    "Rent / Mortgage": 2000,
-    Groceries: 400,
-    "Dining Out": 200,
-    Transportation: 250,
-    Utilities: 300,
-  });
+const [categoryBudgets, setCategoryBudgets] = useState<Record<string, number>>({});
 
-  // Load user + transactions using AuthContext
+// Load budgets from localStorage
+useEffect(() => {
+  try {
+    const saved = localStorage.getItem("ft-budgets");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed === "object") {
+        setCategoryBudgets(parsed);
+      }
+    }
+  } catch (err) {
+    console.error("Error loading budgets:", err);
+  }
+}, []);
+
+// Save budgets to localStorage whenever they change
+useEffect(() => {
+  try {
+    localStorage.setItem("ft-budgets", JSON.stringify(categoryBudgets));
+  } catch (err) {
+    console.error("Error saving budgets:", err);
+  }
+}, [categoryBudgets]);
+
+
+
+  // ---- LOAD / SAVE CATEGORIES & BUDGETS (left bar order + budgets persist) ----
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    try {
+      const storedCats = window.localStorage.getItem(CATEGORIES_STORAGE_KEY);
+      if (storedCats) {
+        const parsed = JSON.parse(storedCats) as Category[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCategories(parsed);
+        }
+      }
+
+      const storedBudgets = window.localStorage.getItem(BUDGETS_STORAGE_KEY);
+      if (storedBudgets) {
+        const parsedBudgets = JSON.parse(storedBudgets) as Record<
+          string,
+          number
+        >;
+        if (parsedBudgets && typeof parsedBudgets === "object") {
+          setCategoryBudgets((prev) => ({
+            ...prev,
+            ...parsedBudgets,
+          }));
+        }
+      }
+    } catch {
+      // If parsing fails, ignore and keep defaults
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        CATEGORIES_STORAGE_KEY,
+        JSON.stringify(categories)
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [categories]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        BUDGETS_STORAGE_KEY,
+        JSON.stringify(categoryBudgets)
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [categoryBudgets]);
+
+// Load saved category order from Supabase for this user
+useEffect(() => {
+  if (!userId) return;
+
+  async function loadCategoryOrder() {
+    console.log("Loading category order for user:", userId);
+
+    const { data, error } = await supabase
+      .from("users")
+      .select("category_order")
+      .eq("id", userId)
+      .single();
+
+    if (error) {
+      console.warn("Could not load category order:", error.message);
+      // Fall back to defaults
+      setCategories(DEFAULT_CATEGORIES);
+      setCategoriesLoaded(true);
+      return;
+    }
+
+    const saved = data?.category_order;
+
+    if (Array.isArray(saved) && saved.length > 0) {
+      console.log("Using saved category order from Supabase:", saved);
+      const restored: Category[] = saved.map((item: any) => ({
+        name: item.name,
+        type: item.type as TransactionType,
+      }));
+      setCategories(restored);
+      setCategoriesLoaded(true);
+    } else {
+      console.log("No saved category order; using defaults");
+      setCategories(DEFAULT_CATEGORIES);
+      setCategoriesLoaded(true);
+    }
+  }
+
+  loadCategoryOrder();
+}, [userId]);
+
+
+// Save category order to Supabase whenever categories change
+useEffect(() => {
+  if (!userId || !categoriesLoaded) {
+    if (!categoriesLoaded) {
+      console.log("Skip saving categories: not loaded from DB yet");
+    }
+    return;
+  }
+
+  console.log("Saving category order to Supabase:", categories);
+
+  async function saveCategoryOrder() {
+    const payload = categories.map((c) => ({
+      name: c.name,
+      type: c.type,
+    }));
+
+    const { error } = await supabase
+      .from("users")
+      .update({ category_order: payload })
+      .eq("id", userId);
+
+    if (error) {
+      console.error("Error saving category order:", error.message);
+    } else {
+      console.log("Successfully saved category order!");
+    }
+  }
+
+  saveCategoryOrder();
+}, [categories, userId, categoriesLoaded]);
+
+  // Load transactions from Supabase
   useEffect(() => {
     async function load() {
       if (authLoading) return;
@@ -140,12 +302,11 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
       setUserId(user.id);
 
       const { data, error } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("user_id", user.id)
-      .gte("date", windowStartStr)
-      .order("date", { ascending: false });
-
+        .from("transactions")
+        .select("*")
+        .eq("user_id", user.id)
+        .gte("date", windowStartStr)
+        .order("date", { ascending: false });
 
       if (error) {
         setErrorMessage(error.message);
@@ -166,7 +327,6 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
   }
 
   // ----- CATEGORY & ENTRY HANDLERS -----
-
   function handleAddCategory(e: FormEvent) {
     e.preventDefault();
     const name = newCategoryName.trim();
@@ -208,10 +368,9 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
 
     const chosen = new Date(formDate);
     if (chosen < windowStart || chosen > today) {
-  setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
-  return;
-}
-
+      setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
+      return;
+    }
 
     setSaving(true);
 
@@ -280,10 +439,9 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
 
     const chosen = new Date(quickDate);
     if (chosen < windowStart || chosen > today) {
-  setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
-  return;
-}
-
+      setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
+      return;
+    }
 
     setQuickSaving(true);
 
@@ -355,10 +513,9 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
 
     const chosen = new Date(editDate);
     if (chosen < windowStart || chosen > today) {
-  setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
-  return;
-}
-
+      setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
+      return;
+    }
 
     setEditingSaving(true);
 
@@ -523,7 +680,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
         <aside className="w-64 border-r border-slate-800 bg-slate-950/80 flex flex-col">
           <div className="px-4 py-4 border-b border-slate-800">
             <h2 className="text-sm font-semibold tracking-wide">
-              MoneyControl
+              FlowTrack
             </h2>
             <p className="text-[11px] text-slate-400">
               See it. Measure it. Control it.
@@ -562,9 +719,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
                         }`}
                         onClick={() => {
                           setSelectedCategory(cat.name);
-                          setExpandedCategory(
-                            isExpanded ? null : cat.name
-                          );
+                          setExpandedCategory(isExpanded ? null : cat.name);
                         }}
                       >
                         <div className="flex flex-col min-w-0">
@@ -615,17 +770,12 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
 
                       {isExpanded && (
                         <form
-                          onSubmit={(e) =>
-                            handleAddCategoryEntry(e, cat.name)
-                          }
+                          onSubmit={(e) => handleAddCategoryEntry(e, cat.name)}
                           className="px-3 pb-3 pt-2 border-t border-slate-800 space-y-2 text-[11px]"
                         >
                           <div className="text-[10px] text-slate-400 mb-1">
                             Add{" "}
-                            {cat.type === "income"
-                              ? "income"
-                              : "expense"}{" "}
-                            entry
+                            {cat.type === "income" ? "income" : "expense"} entry
                           </div>
 
                           <div>
@@ -635,9 +785,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
                               min="0"
                               step="0.01"
                               value={formAmount}
-                              onChange={(e) =>
-                                setFormAmount(e.target.value)
-                              }
+                              onChange={(e) => setFormAmount(e.target.value)}
                               className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
                               placeholder="0.00"
                             />
@@ -647,18 +795,15 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
                             <label className="block mb-1">
                               Date{" "}
                               <span className="text-[10px] text-slate-400">
-                              (last {windowDays} days)
+                                (last {windowDays} days)
                               </span>
-
                             </label>
                             <input
                               type="date"
                               min={windowStartStr}
                               max={todayStr}
                               value={formDate}
-                              onChange={(e) =>
-                                setFormDate(e.target.value)
-                              }
+                              onChange={(e) => setFormDate(e.target.value)}
                               className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
                             />
                           </div>
@@ -683,9 +828,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
                             disabled={saving}
                             className="w-full rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed py-1.5 text-[11px] font-medium mt-1"
                           >
-                            {saving
-                              ? "Saving..."
-                              : `Add to "${cat.name}"`}
+                            {saving ? "Saving..." : `Add to "${cat.name}"`}
                           </button>
                         </form>
                       )}
@@ -696,9 +839,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
             </div>
 
             <form onSubmit={handleAddCategory} className="space-y-1 text-[11px]">
-              <label className="block text-slate-400 px-1">
-                Add category
-              </label>
+              <label className="block text-slate-400 px-1">Add category</label>
               <div className="flex flex-wrap gap-1">
                 <input
                   type="text"
@@ -711,9 +852,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
                   className="w-[90px] rounded-lg bg-slate-950 border border-slate-700 px-2 py-1"
                   value={newCategoryType}
                   onChange={(e) =>
-                    setNewCategoryType(
-                      e.target.value as TransactionType
-                    )
+                    setNewCategoryType(e.target.value as TransactionType)
                   }
                 >
                   <option value="expense">Expense</option>
@@ -752,15 +891,32 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
             </p>
             <p className="mt-1 text-emerald-400">
               {isPro
-              ? "Pro: tracking the last 90 days. Reports coming soon."
-              : "Free: tracking the last 30 days. Upgrade to Pro for 90 days & reports."}
-</p>
-
+                ? "Pro: tracking the last 90 days. Reports coming soon."
+                : "Free: tracking the last 30 days. Upgrade to Pro for 90 days & reports."}
+            </p>
           </div>
         </aside>
 
         {/* CENTER AREA */}
         <section className="flex-1 flex flex-col">
+
+        {/* Time Window Selector */}
+          <div className="flex items-center gap-2 text-xs text-slate-300 ml-auto">
+            <span>Time:</span>
+           <select
+             className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs"
+              value={windowDays}
+            onChange={(e) => setWindowDays(Number(e.target.value))}
+               >
+             {DAY_OPTIONS.map(days => (
+              <option key={days} value={days}>
+           Last {days} days
+      </option>
+    ))}
+  </select>
+</div>
+
+
           {/* Header */}
           <header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-950/80">
             <div className="flex items-center gap-2 text-xs text-slate-400">
@@ -769,13 +925,12 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
             </div>
 
             <div className="flex items-center gap-3 text-xs text-slate-200">
-              
               <button
                 className="px-3 py-1 rounded-full border border-slate-600 text-xs text-slate-300 cursor-not-allowed opacity-60"
-                    disabled
-                >
-                   Dark mode
-                </button>
+                disabled
+              >
+                Dark mode
+              </button>
 
               {userEmail && (
                 <span className="px-2 py-1 rounded-full bg-slate-900 border border-slate-700">
@@ -1025,9 +1180,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
                             </div>
                             <div className="text-[11px] text-slate-400">
                               {t.date}
-                              {t.description
-                                ? ` • ${t.description}`
-                                : ""}
+                              {t.description ? ` • ${t.description}` : ""}
                             </div>
                           </div>
                           <div className="flex items-center gap-1 ml-2">
@@ -1078,9 +1231,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
                           </div>
                           <div className="text-[11px] text-slate-400">
                             {t.category} • {t.date}
-                            {t.description
-                              ? ` • ${t.description}`
-                              : ""}
+                            {t.description ? ` • ${t.description}` : ""}
                           </div>
                         </div>
                         <button
@@ -1223,7 +1374,9 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
                 much you&apos;ve used so far.
               </p>
 
-              <div className="space-y-2 pr-1">
+              {/* Limited height so this area doesn't grow forever */}
+              <div className="space-y-2 pr-1 max-h-56 overflow-y-auto budget-scroll">
+
                 {categories.map((cat) => {
                   const budget = categoryBudgets[cat.name] ?? 0;
                   const spent = expenseByCategory[cat.name] ?? 0;
@@ -1289,47 +1442,50 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
             </div>
 
             {/* Pro plan status */}
-<div className="bg-slate-900 rounded-lg border border-emerald-600/60 p-3">
-  <h3 className="font-medium mb-1 text-xs text-emerald-300">
-    {isPro ? "Pro plan active" : "Free plan"}
-  </h3>
+            <div className="bg-slate-900 rounded-lg border border-emerald-600/60 p-3">
+              <h3 className="font-medium mb-1 text-xs text-emerald-300">
+                {isPro ? "Pro plan active" : "Free plan"}
+              </h3>
 
-  {isPro ? (
-    <>
-      <p className="text-slate-300">
-        You&apos;re currently using the{" "}
-        <span className="font-semibold text-amber-300">Pro</span> plan.
-      </p>
-      <p className="mt-1 text-slate-400">
-        Tracking the last{" "}
-        <span className="font-semibold text-emerald-300">
-          {windowDays} days
-        </span>{" "}
-        of activity with advanced dashboards.
-      </p>
-      <p className="mt-1 text-slate-500">
-        More Pro features like reports and trends will appear here as we
-        build them.
-      </p>
-    </>
-  ) : (
-    <>
-      <p className="text-slate-300">
-        You&apos;re currently on the{" "}
-        <span className="font-semibold">Free</span> plan.
-      </p>
-      <p className="mt-1 text-slate-400">
-        Free tracks the last{" "}
-        <span className="font-semibold">{windowDays} days</span> only.
-      </p>
-      <p className="mt-1 text-slate-500">
-        Upgrade to Pro to unlock a longer history window and richer
-        insights here.
-      </p>
-    </>
-  )}
-</div>
-
+              {isPro ? (
+                <>
+                  <p className="text-slate-300">
+                    You&apos;re currently using the{" "}
+                    <span className="font-semibold text-amber-300">
+                      Pro
+                    </span>{" "}
+                    plan.
+                  </p>
+                  <p className="mt-1 text-slate-400">
+                    Tracking the last{" "}
+                    <span className="font-semibold text-emerald-300">
+                      {windowDays} days
+                    </span>{" "}
+                    of activity with advanced dashboards.
+                  </p>
+                  <p className="mt-1 text-slate-500">
+                    More Pro features like reports and trends will appear here
+                    as we build them.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-slate-300">
+                    You&apos;re currently on the{" "}
+                    <span className="font-semibold">Free</span> plan.
+                  </p>
+                  <p className="mt-1 text-slate-400">
+                    Free tracks the last{" "}
+                    <span className="font-semibold">{windowDays} days</span>{" "}
+                    only.
+                  </p>
+                  <p className="mt-1 text-slate-500">
+                    Upgrade to Pro to unlock a longer history window and richer
+                    insights here.
+                  </p>
+                </>
+              )}
+            </div>
 
             {/* PIE CHART */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-4 flex flex-col items-center mt-2">
@@ -1366,9 +1522,7 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
                 <div className="absolute text-center">
                   <div className="text-xs font-semibold">
                     {income > 0
-                      ? `${Math.round(
-                          Math.min(spendingRatio, 1) * 100
-                        )}%`
+                      ? `${Math.round(Math.min(spendingRatio, 1) * 100)}%`
                       : "--"}
                   </div>
                   <div className="text-[10px] text-slate-400">
@@ -1421,3 +1575,4 @@ const windowStartStr = windowStart.toISOString().slice(0, 10);
     </main>
   );
 }
+
