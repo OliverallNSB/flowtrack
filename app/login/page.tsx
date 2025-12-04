@@ -54,8 +54,14 @@ export default function LoginPage() {
         return;
       }
 
-      console.log("Login success, user:", data.user);
+            console.log("Login success, user:", data.user);
       setDebugStatus("Login success. Redirecting to dashboard…");
+
+      // ✅ Hard redirect so it behaves like when you type /dashboard manually
+      setTimeout(() => {
+        window.location.href = "/dashboard";
+      }, 150);
+
 
       // Success → go to dashboard (or /pro if you prefer while testing)
       router.push("/dashboard");
@@ -94,6 +100,7 @@ export default function LoginPage() {
           </div>
         )}
 
+          
         <form onSubmit={handleSubmit} className="space-y-4 text-sm">
           <div>
             <label className="block mb-1 text-slate-300" htmlFor="email">
