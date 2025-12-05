@@ -1,21 +1,33 @@
 // app/login/page.tsx
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, FormEvent, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseclient";
+import { useAuth } from "@/app/context/AuthContext";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [debugStatus, setDebugStatus] = useState<string>("Idle");
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
+
+  // If already logged in, skip login page
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace("/dashboard");
+    }
+  }, [authLoading, user, router]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setErrorMessage(null);
+    setResetMessage(null);
     setDebugStatus("Starting login…");
 
     if (!email || !password) {
@@ -27,7 +39,6 @@ export default function LoginPage() {
     setSubmitting(true);
 
     try {
-      // ✅ Check if supabase.auth.signInWithPassword actually exists
       const canSignIn =
         (supabase as any)?.auth &&
         typeof (supabase as any).auth.signInWithPassword === "function";
@@ -54,17 +65,13 @@ export default function LoginPage() {
         return;
       }
 
-            console.log("Login success, user:", data.user);
+      console.log("Login success, user:", data.user);
       setDebugStatus("Login success. Redirecting to dashboard…");
 
       // ✅ Hard redirect so it behaves like when you type /dashboard manually
       setTimeout(() => {
         window.location.href = "/dashboard";
       }, 150);
-
-
-      // Success → go to dashboard (or /pro if you prefer while testing)
-      router.push("/dashboard");
     } catch (err: any) {
       console.error("Unexpected login error:", err);
       setErrorMessage("Unexpected error during login.");
@@ -72,8 +79,43 @@ export default function LoginPage() {
         `Unexpected error: ${err?.message ?? String(err ?? "Unknown")}`
       );
     } finally {
-      // ✅ Ensure the button is not stuck on "Signing in..."
       setSubmitting(false);
+    }
+  }
+
+  async function handleResetPassword() {
+    setErrorMessage(null);
+    setResetMessage(null);
+
+    if (!email) {
+      setErrorMessage("Please enter your email above first.");
+      return;
+    }
+
+    try {
+      setDebugStatus("Sending password reset email…");
+
+      const redirectTo = `${window.location.origin}/update-password`;
+
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo,
+      });
+
+      if (error) {
+        console.error("Reset password error:", error);
+        setErrorMessage(error.message || "Could not send reset email.");
+        setDebugStatus(`Reset error: ${error.message || "Unknown error"}`);
+        return;
+      }
+
+      setResetMessage("Check your email for a password reset link.");
+      setDebugStatus("Password reset email sent.");
+    } catch (err: any) {
+      console.error("Unexpected reset error:", err);
+      setErrorMessage("Unexpected error while sending reset email.");
+      setDebugStatus(
+        `Reset unexpected error: ${err?.message ?? String(err ?? "Unknown")}`
+      );
     }
   }
 
@@ -89,18 +131,27 @@ export default function LoginPage() {
           </p>
         </header>
 
-        {/* Debug info */}
-        <p className="mb-2 text-[11px] text-slate-500">
-          Debug: <span className="text-slate-300">{debugStatus}</span>
-        </p>
+        {/* Spinner while submitting */}
+        {submitting && (
+          <div className="mb-3 flex items-center gap-2 text-[11px] text-slate-400">
+            <span className="inline-block h-3 w-3 rounded-full border border-slate-400 border-t-transparent animate-spin" />
+            <span>Signing you in…</span>
+          </div>
+        )}
 
+        {/* Error / reset messages */}
         {errorMessage && (
           <div className="mb-4 bg-red-500/10 border border-red-500 text-red-200 text-xs rounded-lg px-3 py-2">
             {errorMessage}
           </div>
         )}
 
-          
+        {resetMessage && (
+          <div className="mb-4 bg-emerald-500/10 border border-emerald-500 text-emerald-200 text-xs rounded-lg px-3 py-2">
+            {resetMessage}
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4 text-sm">
           <div>
             <label className="block mb-1 text-slate-300" htmlFor="email">
@@ -138,6 +189,14 @@ export default function LoginPage() {
             className="w-full mt-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed py-2 text-sm font-medium"
           >
             {submitting ? "Signing in..." : "Log in"}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleResetPassword}
+            className="w-full mt-2 text-xs text-emerald-400 hover:text-emerald-300 underline underline-offset-2"
+          >
+            Forgot your password?
           </button>
         </form>
 
