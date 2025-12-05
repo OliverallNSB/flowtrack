@@ -17,12 +17,7 @@ export default function LoginPage() {
   const [debugStatus, setDebugStatus] = useState<string>("Idle");
   const [resetMessage, setResetMessage] = useState<string | null>(null);
 
-  // If already logged in, skip login page
-  useEffect(() => {
-    if (!authLoading && user) {
-      router.replace("/dashboard");
-    }
-  }, [authLoading, user, router]);
+ 
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -213,3 +208,6 @@ export default function LoginPage() {
     </main>
   );
 }
+
+
+// redeploy trigger
