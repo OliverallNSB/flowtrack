@@ -406,76 +406,98 @@ export default function DashboardPage() {
     setExpandedCategory(null);
   }
 
-  async function handleQuickAdd(e: FormEvent) {
-    e.preventDefault();
-    setErrorMessage(null);
+async function handleQuickAdd(e: FormEvent) {
+  e.preventDefault();
+  setErrorMessage(null);
 
-    if (!userId) {
-      setErrorMessage("You must be logged in to add entries.");
-      return;
-    }
-
-    const catName = quickCategory.trim();
-    if (!catName) {
-      setErrorMessage("Choose a category.");
-      return;
-    }
-
-    const cat = categories.find((c) => c.name === catName);
-    const type: TransactionType = cat ? cat.type : "expense";
-
-    if (!quickAmount || !quickDate) {
-      setErrorMessage("Please fill amount and date.");
-      return;
-    }
-
-    const amountNumber = Number(quickAmount);
-    if (Number.isNaN(amountNumber) || amountNumber <= 0) {
-      setErrorMessage("Amount must be a positive number.");
-      return;
-    }
-
-    const chosen = new Date(quickDate);
-    if (chosen < windowStart || chosen > today) {
-      setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
-      return;
-    }
-
-    setQuickSaving(true);
-
-    const { error } = await supabase.from("transactions").insert({
-      user_id: userId,
-      type,
-      amount: amountNumber,
-      date: quickDate,
-      category: catName,
-      description: quickDescription || null,
-    });
-
-    if (error) {
-      setErrorMessage(error.message);
-      setQuickSaving(false);
-      return;
-    }
-
-    const { data, error: txError } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("user_id", userId)
-      .gte("date", windowStartStr)
-      .order("date", { ascending: false });
-
-    if (txError) {
-      setErrorMessage(txError.message);
-    } else {
-      setTransactions((data ?? []) as Transaction[]);
-    }
-
-    setQuickAmount("");
-    setQuickDescription("");
-    setQuickDate(todayStr);
-    setQuickSaving(false);
+  if (!userId) {
+    setErrorMessage("You must be logged in to add entries.");
+    return;
   }
+
+  const catName = quickCategory.trim();
+  if (!catName) {
+    setErrorMessage("Choose a category.");
+    return;
+  }
+
+  // 🔍 Make sure we find the exact category the user selected
+  const cat = categories.find((c) => c.name === catName);
+
+  if (!cat) {
+    console.error("QuickAdd: category not found", { catName, categories });
+    setErrorMessage(
+      "Something went wrong with the category selection. Please refresh and try again."
+    );
+    return;
+  }
+
+  const type: TransactionType = cat.type; // ✅ guaranteed "income" or "expense"
+
+  if (!quickAmount || !quickDate) {
+    setErrorMessage("Please fill amount and date.");
+    return;
+  }
+
+  const amountNumber = Number(quickAmount);
+  if (Number.isNaN(amountNumber) || amountNumber <= 0) {
+    setErrorMessage("Amount must be a positive number.");
+    return;
+  }
+
+  const chosen = new Date(quickDate);
+  if (chosen < windowStart || chosen > today) {
+    setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
+    return;
+  }
+
+  setQuickSaving(true);
+
+  // 🪵 Helpful debug log (you'll see this in the browser DevTools console)
+  console.log("QuickAdd inserting:", {
+    userId,
+    catName,
+    type,
+    amountNumber,
+    date: quickDate,
+    description: quickDescription,
+  });
+
+  const { error } = await supabase.from("transactions").insert({
+    user_id: userId,
+    type,                // ✅ will be "income" for Deposits (Income)
+    amount: amountNumber,
+    date: quickDate,
+    category: catName,   // ✅ exactly the category you selected
+    description: quickDescription || null,
+  });
+
+  if (error) {
+    setErrorMessage(error.message);
+    setQuickSaving(false);
+    return;
+  }
+
+  // Reload recent transactions so the UI updates
+  const { data, error: txError } = await supabase
+    .from("transactions")
+    .select("*")
+    .eq("user_id", userId)
+    .gte("date", windowStartStr)
+    .order("date", { ascending: false });
+
+  if (txError) {
+    setErrorMessage(txError.message);
+  } else {
+    setTransactions((data ?? []) as Transaction[]);
+  }
+
+  setQuickSaving(false);
+  setQuickAmount("");
+  setQuickDescription("");
+  setQuickDate(todayStr);
+}
+
 
   function startEdit(t: Transaction) {
     setEditingId(t.id);
@@ -1091,7 +1113,7 @@ export default function DashboardPage() {
             {/* BOTTOM: CATEGORY ENTRIES + ALL TRANSACTIONS */}
             <div className="grid md:grid-cols-2 gap-4 min-h-0">
               {/* CATEGORY ENTRIES CARD */}
-              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-212">
+              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-[calc(82vh-6rem)]">
                 <h2 className="text-sm font-medium mb-2">
                   Category Entries {windowDays}
                 </h2>
@@ -1258,7 +1280,7 @@ export default function DashboardPage() {
               </div>
 
               {/* ALL TRANSACTIONS CARD */}
-              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-212">
+              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-[calc(82vh-6rem)]">
                 <h2 className="text-sm font-medium mb-3">
                   All transactions {windowDays}
                 </h2>
