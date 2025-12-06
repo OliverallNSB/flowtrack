@@ -1091,7 +1091,7 @@ export default function DashboardPage() {
             {/* BOTTOM: CATEGORY ENTRIES + ALL TRANSACTIONS */}
             <div className="grid md:grid-cols-2 gap-4 min-h-0">
               {/* CATEGORY ENTRIES CARD */}
-              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0">
+              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-212">
                 <h2 className="text-sm font-medium mb-2">
                   Category Entries {windowDays}
                 </h2>
@@ -1258,7 +1258,7 @@ export default function DashboardPage() {
               </div>
 
               {/* ALL TRANSACTIONS CARD */}
-              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0">
+              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-212">
                 <h2 className="text-sm font-medium mb-3">
                   All transactions {windowDays}
                 </h2>
