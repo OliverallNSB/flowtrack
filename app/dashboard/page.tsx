@@ -40,11 +40,11 @@ const DEFAULT_CATEGORIES: Category[] = [
 
 const DEFAULT_CATEGORY_BUDGETS: Record<string, number> = {};
 
-
 const CATEGORIES_STORAGE_KEY = "ft_categories_v1";
 const BUDGETS_STORAGE_KEY = "ft_category_budgets_v1";
 
 // ---- HELPERS ----
+
 function summarize(transactions: Transaction[]) {
   const income = transactions
     .filter((t) => t.type === "income")
@@ -79,26 +79,23 @@ export default function DashboardPage() {
 
   const isPro = profile?.plan === "pro";
 
-  // Time window options depend on plan
-const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90] : [7, 14, 30];
+  // ---- TIME WINDOW (FREE vs PRO) ----
+  const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90] : [7, 14, 30];
+  const [windowDays, setWindowDays] = useState<number>(isPro ? 90 : 30);
 
-// User-selected time window (default: plan max)
-const [windowDays, setWindowDays] = useState<number>(isPro ? 90 : 30);
+  const today = new Date();
+  const windowStart = new Date(today.getTime() - windowDays * 86400000);
+  const todayStr = today.toISOString().slice(0, 10);
+  const windowStartStr = windowStart.toISOString().slice(0, 10);
 
-// Date window based on selected days
-const today = new Date();
-const windowStart = new Date(today.getTime() - windowDays * 86400000);
-const todayStr = today.toISOString().slice(0, 10);
-const windowStartStr = windowStart.toISOString().slice(0, 10);
+  // ---- USER & DATA STATE ----
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-// User & data
-const [userEmail, setUserEmail] = useState<string | null>(null);
-const [userId, setUserId] = useState<string | null>(null);
-const [transactions, setTransactions] = useState<Transaction[]>([]);
-const [loading, setLoading] = useState(true);
-const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Categories
+  // ---- CATEGORY STATE (LEFT BAR) ----
   const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
   const [categoriesLoaded, setCategoriesLoaded] = useState(false);
 
@@ -108,56 +105,56 @@ const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
-  // Inline category form
+  // ---- INLINE ENTRY FORM (LEFT BAR) ----
   const [formAmount, setFormAmount] = useState("");
   const [formDate, setFormDate] = useState("");
   const [formDescription, setFormDescription] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Edit transaction
+  // ---- EDIT TRANSACTION (CENTER) ----
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editAmount, setEditAmount] = useState("");
   const [editDate, setEditDate] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editingSaving, setEditingSaving] = useState(false);
 
-  // Quick Add bar
+  // ---- QUICK ADD BAR (CENTER TOP) ----
   const [quickCategory, setQuickCategory] = useState<string>("");
   const [quickAmount, setQuickAmount] = useState("");
   const [quickDate, setQuickDate] = useState("");
   const [quickDescription, setQuickDescription] = useState("");
   const [quickSaving, setQuickSaving] = useState(false);
 
-  // Simple budgets per category (local-only for now)
-const [categoryBudgets, setCategoryBudgets] = useState<Record<string, number>>({});
+  // ---- SIMPLE BUDGETS (RIGHT SIDEBAR, LOCAL ONLY FOR NOW) ----
+  const [categoryBudgets, setCategoryBudgets] = useState<Record<string, number>>(
+    {}
+  );
 
-// Load budgets from localStorage
-useEffect(() => {
-  try {
-    const saved = localStorage.getItem("ft-budgets");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && typeof parsed === "object") {
-        setCategoryBudgets(parsed);
+  // Load budgets from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("ft-budgets");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === "object") {
+          setCategoryBudgets(parsed);
+        }
       }
+    } catch (err) {
+      console.error("Error loading budgets:", err);
     }
-  } catch (err) {
-    console.error("Error loading budgets:", err);
-  }
-}, []);
+  }, []);
 
-// Save budgets to localStorage whenever they change
-useEffect(() => {
-  try {
-    localStorage.setItem("ft-budgets", JSON.stringify(categoryBudgets));
-  } catch (err) {
-    console.error("Error saving budgets:", err);
-  }
-}, [categoryBudgets]);
+  // Save budgets to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem("ft-budgets", JSON.stringify(categoryBudgets));
+    } catch (err) {
+      console.error("Error saving budgets:", err);
+    }
+  }, [categoryBudgets]);
 
-
-
-  // ---- LOAD / SAVE CATEGORIES & BUDGETS (left bar order + budgets persist) ----
+  // ---- LOAD / SAVE CATEGORIES & BUDGETS (LEFT BAR ORDER + BUDGETS) ----
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -184,7 +181,7 @@ useEffect(() => {
         }
       }
     } catch {
-      // If parsing fails, ignore and keep defaults
+      // ignore parsing errors
     }
   }, []);
 
@@ -212,81 +209,80 @@ useEffect(() => {
     }
   }, [categoryBudgets]);
 
-// Load saved category order from Supabase for this user
-useEffect(() => {
-  if (!userId) return;
+  // ---- LOAD CATEGORY ORDER FROM SUPABASE ----
+  useEffect(() => {
+    if (!userId) return;
 
-  async function loadCategoryOrder() {
-    console.log("Loading category order for user:", userId);
+    async function loadCategoryOrder() {
+      console.log("Loading category order for user:", userId);
 
-    const { data, error } = await supabase
-      .from("users")
-      .select("category_order")
-      .eq("id", userId)
-      .single();
+      const { data, error } = await supabase
+        .from("users")
+        .select("category_order")
+        .eq("id", userId)
+        .single();
 
-    if (error) {
-      console.warn("Could not load category order:", error.message);
-      // Fall back to defaults
-      setCategories(DEFAULT_CATEGORIES);
-      setCategoriesLoaded(true);
+      if (error) {
+        console.warn("Could not load category order:", error.message);
+        // Fall back to defaults
+        setCategories(DEFAULT_CATEGORIES);
+        setCategoriesLoaded(true);
+        return;
+      }
+
+      const saved = data?.category_order;
+
+      if (Array.isArray(saved) && saved.length > 0) {
+        console.log("Using saved category order from Supabase:", saved);
+        const restored: Category[] = saved.map((item: any) => ({
+          name: item.name,
+          type: item.type as TransactionType,
+        }));
+        setCategories(restored);
+        setCategoriesLoaded(true);
+      } else {
+        console.log("No saved category order; using defaults");
+        setCategories(DEFAULT_CATEGORIES);
+        setCategoriesLoaded(true);
+      }
+    }
+
+    loadCategoryOrder();
+  }, [userId]);
+
+  // ---- SAVE CATEGORY ORDER TO SUPABASE ----
+  useEffect(() => {
+    if (!userId || !categoriesLoaded) {
+      if (!categoriesLoaded) {
+        console.log("Skip saving categories: not loaded from DB yet");
+      }
       return;
     }
 
-    const saved = data?.category_order;
+    console.log("Saving category order to Supabase:", categories);
 
-    if (Array.isArray(saved) && saved.length > 0) {
-      console.log("Using saved category order from Supabase:", saved);
-      const restored: Category[] = saved.map((item: any) => ({
-        name: item.name,
-        type: item.type as TransactionType,
+    async function saveCategoryOrder() {
+      const payload = categories.map((c) => ({
+        name: c.name,
+        type: c.type,
       }));
-      setCategories(restored);
-      setCategoriesLoaded(true);
-    } else {
-      console.log("No saved category order; using defaults");
-      setCategories(DEFAULT_CATEGORIES);
-      setCategoriesLoaded(true);
+
+      const { error } = await supabase
+        .from("users")
+        .update({ category_order: payload })
+        .eq("id", userId);
+
+      if (error) {
+        console.error("Error saving category order:", error.message);
+      } else {
+        console.log("Successfully saved category order!");
+      }
     }
-  }
 
-  loadCategoryOrder();
-}, [userId]);
+    saveCategoryOrder();
+  }, [categories, userId, categoriesLoaded]);
 
-
-// Save category order to Supabase whenever categories change
-useEffect(() => {
-  if (!userId || !categoriesLoaded) {
-    if (!categoriesLoaded) {
-      console.log("Skip saving categories: not loaded from DB yet");
-    }
-    return;
-  }
-
-  console.log("Saving category order to Supabase:", categories);
-
-  async function saveCategoryOrder() {
-    const payload = categories.map((c) => ({
-      name: c.name,
-      type: c.type,
-    }));
-
-    const { error } = await supabase
-      .from("users")
-      .update({ category_order: payload })
-      .eq("id", userId);
-
-    if (error) {
-      console.error("Error saving category order:", error.message);
-    } else {
-      console.log("Successfully saved category order!");
-    }
-  }
-
-  saveCategoryOrder();
-}, [categories, userId, categoriesLoaded]);
-
-  // Load transactions from Supabase
+  // ---- LOAD TRANSACTIONS FROM SUPABASE ----
   useEffect(() => {
     async function load() {
       if (authLoading) return;
@@ -322,12 +318,13 @@ useEffect(() => {
     load();
   }, [user, authLoading, router, windowStartStr]);
 
+  // ---- LOGOUT ----
   async function handleLogout() {
     await supabase.auth.signOut();
     router.push("/login");
   }
 
-  // ----- CATEGORY & ENTRY HANDLERS -----
+  // ---- CATEGORY & ENTRY HANDLERS (LEFT BAR + CENTER) ----
   function handleAddCategory(e: FormEvent) {
     e.preventDefault();
     const name = newCategoryName.trim();
@@ -600,10 +597,6 @@ useEffect(() => {
     if (expandedCategory === name) setExpandedCategory(null);
   }
 
-
-
-  
-  
   function moveCategory(name: string, direction: "up" | "down") {
     setCategories((prev) => {
       const index = prev.findIndex((c) => c.name === name);
@@ -618,7 +611,7 @@ useEffect(() => {
     });
   }
 
-  // Defaults for dates & quick category
+  // ---- DEFAULT DATES & QUICK CATEGORY ----
   useEffect(() => {
     if (!formDate) setFormDate(todayStr);
     if (!quickDate) setQuickDate(todayStr);
@@ -630,7 +623,7 @@ useEffect(() => {
     }
   }, [quickCategory, categories]);
 
-  // Derived values
+  // ---- DERIVED VALUES ----
   const { income, expenses, net } = summarize(transactions);
 
   let status: "OK" | "WARNING" | "DANGER" = "OK";
@@ -645,13 +638,12 @@ useEffect(() => {
     ? transactions.filter((t) => t.category === selectedCategory)
     : [];
 
-const categoryTotal = categoryTransactions.reduce(
-  (sum, t) =>
-    sum +
-    (t.type === "expense" ? -Number(t.amount) : Number(t.amount)),
-  0
-);
-
+  const categoryTotal = categoryTransactions.reduce(
+    (sum, t) =>
+      sum +
+      (t.type === "expense" ? -Number(t.amount) : Number(t.amount)),
+    0
+  );
 
   const savingsRate = income > 0 ? Math.round((net / income) * 100) : null;
 
@@ -669,7 +661,7 @@ const categoryTotal = categoryTransactions.reduce(
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3);
 
-  // Show loading while auth OR data is loading
+  // ---- LOADING / REDIRECT ----
   if (authLoading || loading) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100">
@@ -686,21 +678,23 @@ const categoryTotal = categoryTransactions.reduce(
     );
   }
 
+  // ---- MAIN LAYOUT ----
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <div className="flex min-h-screen">
-        {/* LEFT SIDEBAR */}
+        {/* ========================= */}
+        {/* LEFT SIDEBAR             */}
+        {/* ========================= */}
         <aside className="w-64 border-r border-slate-800 bg-slate-950/80 flex flex-col">
           <div className="px-4 py-4 border-b border-slate-800">
-            <h2 className="text-sm font-semibold tracking-wide">
-              FlowTrack
-            </h2>
+            <h2 className="text-sm font-semibold tracking-wide">FlowTrack</h2>
             <p className="text-[11px] text-slate-400">
               See it. Measure it. Control it.
             </p>
           </div>
 
           <div className="flex-1 px-3 py-3 flex flex-col gap-3 text-xs overflow-y-auto">
+            {/* CATEGORIES LIST */}
             <div>
               <div className="text-slate-400 uppercase text-[10px] px-1 mb-1">
                 Categories
@@ -851,7 +845,11 @@ const categoryTotal = categoryTransactions.reduce(
               </div>
             </div>
 
-            <form onSubmit={handleAddCategory} className="space-y-1 text-[11px]">
+            {/* ADD CATEGORY FORM */}
+            <form
+              onSubmit={handleAddCategory}
+              className="space-y-1 text-[11px]"
+            >
               <label className="block text-slate-400 px-1">Add category</label>
               <div className="flex flex-wrap gap-1">
                 <input
@@ -883,6 +881,7 @@ const categoryTotal = categoryTransactions.reduce(
               </p>
             </form>
 
+            {/* LEFT SIDEBAR FOOTER */}
             <div className="mt-auto pt-3 border-t border-slate-800">
               <button
                 type="button"
@@ -893,12 +892,11 @@ const categoryTotal = categoryTransactions.reduce(
             </div>
           </div>
 
+          {/* LEFT SIDEBAR PLAN LABEL */}
           <div className="px-3 py-3 border-t border-slate-800 text-[11px] text-slate-400">
             <p>
               Plan:{" "}
-              <span
-                className={isPro ? "text-amber-300 font-semibold" : ""}
-              >
+              <span className={isPro ? "text-amber-300 font-semibold" : ""}>
                 {isPro ? "Pro" : "Free"}
               </span>
             </p>
@@ -910,76 +908,74 @@ const categoryTotal = categoryTransactions.reduce(
           </div>
         </aside>
 
-        {/* CENTER AREA */}
+        {/* ========================= */}
+        {/* CENTER AREA               */}
+        {/* ========================= */}
         <section className="flex-1 flex flex-col">
+          {/* TOP HORIZONTAL BAR / HEADER */}
+          <header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-950/80 mb-3">
+            {/* Left side */}
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span>Live money session</span>
+            </div>
 
-        
+            {/* Right side: Plan badge + Time + Dark mode + User + Logout */}
+            <div className="flex items-center gap-3 text-xs text-slate-200">
+              {/* Plan badge */}
+              <span
+                className={
+                  isPro
+                    ? "px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500 text-[11px] uppercase tracking-wide text-emerald-300"
+                    : "px-2 py-1 rounded-full bg-slate-800 border border-slate-600 text-[11px] uppercase tracking-wide text-slate-300"
+                }
+              >
+                {isPro ? "PRO" : "FREE"}
+              </span>
 
-{/* Header */}
-<header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-950/80 mb-3">
+              {/* Time selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400">Time:</span>
+                <select
+                  className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs"
+                  value={windowDays}
+                  onChange={(e) => setWindowDays(Number(e.target.value))}
+                >
+                  {DAY_OPTIONS.map((days) => (
+                    <option key={days} value={days}>
+                      Last {days} days
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-  {/* Left side */}
-  <div className="flex items-center gap-2 text-xs text-slate-400">
-    <span className="w-2 h-2 rounded-full bg-emerald-400" />
-    <span>Live money session</span>
-  </div>
+              {/* Dark Mode (placeholder) */}
+              <button
+                className="px-3 py-1 rounded-full border border-slate-600 text-xs text-slate-300 cursor-not-allowed opacity-60"
+                disabled
+              >
+                Dark mode
+              </button>
 
-  {/* Right side: Plan badge + Time + Dark mode + User + Logout */}
-<div className="flex items-center gap-3 text-xs text-slate-200">
-  {/* Plan badge */}
-  <span
-    className={
-      isPro
-        ? "px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500 text-[11px] uppercase tracking-wide text-emerald-300"
-        : "px-2 py-1 rounded-full bg-slate-800 border border-slate-600 text-[11px] uppercase tracking-wide text-slate-300"
-    }
-  >
-    {isPro ? "PRO" : "FREE"}
-  </span>
+              {/* Logged in user */}
+              {userEmail && (
+                <span className="px-2 py-1 rounded-full bg-slate-900 border border-slate-700">
+                  Welcome,&nbsp;
+                  <span className="font-semibold text-slate-50">
+                    {userEmail}
+                  </span>
+                </span>
+              )}
 
-  {/* Time selector */}
-  <div className="flex items-center gap-2">
-    <span className="text-slate-400">Time:</span>
-    <select
-      className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs"
-      value={windowDays}
-      onChange={(e) => setWindowDays(Number(e.target.value))}
-    >
-      {DAY_OPTIONS.map((days) => (
-        <option key={days} value={days}>
-          Last {days} days
-        </option>
-      ))}
-    </select>
-  </div>
-
-  {/* Dark Mode */}
-  <button
-    className="px-3 py-1 rounded-full border border-slate-600 text-xs text-slate-300 cursor-not-allowed opacity-60"
-    disabled
-  >
-    Dark mode
-  </button>
-
-  {userEmail && (
-    <span className="px-2 py-1 rounded-full bg-slate-900 border border-slate-700">
-      Welcome,&nbsp;
-      <span className="font-semibold text-slate-50">{userEmail}</span>
-    </span>
-  )}
-
-  <button
-    onClick={handleLogout}
-    className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-500 text-[11px] font-medium"
-  >
-    Log out
-  </button>
-</div>
-
-</header>
-
-       
-
+              {/* Logout */}
+              <button
+                onClick={handleLogout}
+                className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-500 text-[11px] font-medium"
+              >
+                Log out
+              </button>
+            </div>
+          </header>
 
           {/* QUICK ADD BAR */}
           <div className="border-b border-slate-900 bg-slate-950/80 px-4 py-2 text-[11px]">
@@ -1038,9 +1034,11 @@ const categoryTotal = categoryTransactions.reduce(
             </form>
           </div>
 
-          {/* MAIN GRID */}
+          {/* ========================= */}
+          {/* MAIN GRID (SUMMARY + LISTS) */}
+          {/* ========================= */}
           <div className="flex-1 grid grid-rows-[minmax(0,0.25fr),minmax(0,0.75fr)] gap-4 p-4">
-            {/* SUMMARY */}
+            {/* SUMMARY: INCOME / EXPENSES / NET */}
             <div className="grid md:grid-cols-3 gap-4">
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
@@ -1092,9 +1090,10 @@ const categoryTotal = categoryTransactions.reduce(
 
             {/* BOTTOM: CATEGORY ENTRIES + ALL TRANSACTIONS */}
             <div className="grid md:grid-cols-2 gap-4 min-h-0">
+              {/* CATEGORY ENTRIES CARD */}
               <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0">
                 <h2 className="text-sm font-medium mb-2">
-                  Category entries {windowDays}
+                  Category Entries {windowDays}
                 </h2>
 
                 {errorMessage && (
@@ -1120,13 +1119,13 @@ const categoryTotal = categoryTransactions.reduce(
                   <>
                     <p className="text-[11px] text-slate-400">
                       Entries for{" "}
-                     <span className="font-semibold text-slate-200">
+                      <span className="font-semibold text-slate-200">
                         {selectedCategory}
                       </span>
                       :
                     </p>
 
-                    {/* NEW — Category Total */}
+                    {/* CATEGORY TOTAL LINE */}
                     <p className="text-[11px] mt-1 mb-3">
                       Total:{" "}
                       <span
@@ -1135,121 +1134,130 @@ const categoryTotal = categoryTransactions.reduce(
                             ? "text-red-300 font-semibold"
                             : "text-emerald-300 font-semibold"
                         }
-    >
-      {categoryTotal < 0 ? "-$" : "$"}
-      {Math.abs(categoryTotal).toFixed(2)}
-    </span>
-  </p>
-  {/* END NEW */}
+                      >
+                        {categoryTotal < 0 ? "-$" : "$"}
+                        {Math.abs(categoryTotal).toFixed(2)}
+                      </span>
+                    </p>
 
-  {editingId && (
-    <form
-      onSubmit={handleSaveEdit}
-      className="mb-3 p-2 rounded-lg border border-slate-700 bg-slate-950 space-y-2 text-[11px]"
-    >
-      <div className="text-[10px] text-slate-400">
-        Editing entry
-      </div>
+                    {editingId && (
+                      <form
+                        onSubmit={handleSaveEdit}
+                        className="mb-3 p-2 rounded-lg border border-slate-700 bg-slate-950 space-y-2 text-[11px]"
+                      >
+                        <div className="text-[10px] text-slate-400">
+                          Editing entry
+                        </div>
 
-      <div className="flex gap-2">
-        <div className="flex-1">
-          <label className="block mb-1">Amount</label>
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={editAmount}
-            onChange={(e) => setEditAmount(e.target.value)}
-            className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
-          />
-        </div>
-        <div className="flex-1">
-          <label className="block mb-1">
-            Date{" "}
-            <span className="text-[10px] text-slate-400">
-              (last {windowDays} days)
-            </span>
-          </label>
-          <input
-            type="date"
-            min={windowStartStr}
-            max={todayStr}
-            value={editDate}
-            onChange={(e) => setEditDate(e.target.value)}
-            className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
-          />
-        </div>
-      </div>
+                        <div className="flex gap-2">
+                          <div className="flex-1">
+                            <label className="block mb-1">Amount</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={editAmount}
+                              onChange={(e) =>
+                                setEditAmount(e.target.value)
+                              }
+                              className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <label className="block mb-1">
+                              Date{" "}
+                              <span className="text-[10px] text-slate-400">
+                                (last {windowDays} days)
+                              </span>
+                            </label>
+                            <input
+                              type="date"
+                              min={windowStartStr}
+                              max={todayStr}
+                              value={editDate}
+                              onChange={(e) =>
+                                setEditDate(e.target.value)
+                              }
+                              className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
+                            />
+                          </div>
+                        </div>
 
-      <div>
-        <label className="block mb-1">Description (optional)</label>
-        <input
-          type="text"
-          value={editDescription}
-          onChange={(e) => setEditDescription(e.target.value)}
-          className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
-        />
-      </div>
+                        <div>
+                          <label className="block mb-1">
+                            Description (optional)
+                          </label>
+                          <input
+                            type="text"
+                            value={editDescription}
+                            onChange={(e) =>
+                              setEditDescription(e.target.value)
+                            }
+                            className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
+                          />
+                        </div>
 
-      <div className="flex gap-2 justify-end">
-        <button
-          type="button"
-          onClick={cancelEdit}
-          className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-200 text-[11px]"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={editingSaving}
-          className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-[11px] font-medium"
-        >
-          {editingSaving ? "Saving..." : "Save changes"}
-        </button>
-      </div>
-    </form>
-  )}
+                        <div className="flex gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={cancelEdit}
+                            className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-200 text-[11px]"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={editingSaving}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-[11px] font-medium"
+                          >
+                            {editingSaving ? "Saving..." : "Save changes"}
+                          </button>
+                        </div>
+                      </form>
+                    )}
 
-  <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1">
-    {categoryTransactions.map((t) => (
-      <li
-        key={t.id}
-        className="flex items-center justify-between border-b border-slate-800/80 pb-1"
-      >
-        <div>
-          <div className="font-medium">
-            {t.type === "income" ? "+" : "-"}
-            {formatCurrency(Number(t.amount))}
-          </div>
-          <div className="text-[11px] text-slate-400">
-            {t.date}
-            {t.description ? ` • ${t.description}` : ""}
-          </div>
-        </div>
-        <div className="flex items-center gap-1 ml-2">
-          <button
-            type="button"
-            onClick={() => startEdit(t)}
-            className="px-2 py-1 rounded-md border border-slate-600 text-[10px] text-slate-200 hover:bg-slate-800"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={() => handleDeleteTransaction(t.id)}
-            className="px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20"
-          >
-            Delete
-          </button>
-        </div>
-      </li>
-    ))}
-  </ul>
-</>
-
+                    <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1">
+                      {categoryTransactions.map((t) => (
+                        <li
+                          key={t.id}
+                          className="flex items-center justify-between border-b border-slate-800/80 pb-1"
+                        >
+                          <div>
+                            <div className="font-medium">
+                              {t.type === "income" ? "+" : "-"}
+                              {formatCurrency(Number(t.amount))}
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              {t.date}
+                              {t.description ? ` • ${t.description}` : ""}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 ml-2">
+                            <button
+                              type="button"
+                              onClick={() => startEdit(t)}
+                              className="px-2 py-1 rounded-md border border-slate-600 text-[10px] text-slate-200 hover:bg-slate-800"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleDeleteTransaction(t.id)
+                              }
+                              className="px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
                 )}
               </div>
 
+              {/* ALL TRANSACTIONS CARD */}
               <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0">
                 <h2 className="text-sm font-medium mb-3">
                   All transactions {windowDays}
@@ -1260,7 +1268,7 @@ const categoryTotal = categoryTransactions.reduce(
                     No transactions yet in the last {windowDays} days.
                   </p>
                 ) : (
-                  <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1">
+                  <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
                     {transactions.map((t) => (
                       <li
                         key={t.id}
@@ -1292,7 +1300,9 @@ const categoryTotal = categoryTransactions.reduce(
           </div>
         </section>
 
-        {/* RIGHT SIDEBAR – PRELIM REPORT + BUDGETS + PIE */}
+        {/* ========================= */}
+        {/* RIGHT SIDEBAR             */}
+        {/* ========================= */}
         <aside className="w-72 border-l border-slate-800 bg-slate-950/80 flex flex-col">
           <div className="px-4 py-4 border-b border-slate-800">
             <h2 className="text-sm font-semibold">Preliminary report</h2>
@@ -1302,7 +1312,7 @@ const categoryTotal = categoryTransactions.reduce(
           </div>
 
           <div className="flex-1 px-4 py-4 space-y-4 text-[11px] text-slate-300 overflow-auto">
-            {/* Status card */}
+            {/* OVERALL STATUS CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-3">
               <h3 className="font-medium mb-1 text-xs">Overall status</h3>
               <p>
@@ -1341,7 +1351,7 @@ const categoryTotal = categoryTransactions.reduce(
               </ul>
             </div>
 
-            {/* Savings rate */}
+            {/* SAVINGS RATE CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-3">
               <h3 className="font-medium mb-1 text-xs">Savings rate</h3>
               {savingsRate === null ? (
@@ -1371,7 +1381,7 @@ const categoryTotal = categoryTransactions.reduce(
               )}
             </div>
 
-            {/* Top expense categories */}
+            {/* TOP EXPENSE CATEGORIES CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-3">
               <h3 className="font-medium mb-1 text-xs">
                 Where your money actually goes
@@ -1408,7 +1418,7 @@ const categoryTotal = categoryTransactions.reduce(
               )}
             </div>
 
-            {/* Budgets */}
+            {/* BUDGET CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-3">
               <h3 className="font-medium mb-1 text-xs">Budgets (Monthly)</h3>
               <p className="text-slate-400 mb-2">
@@ -1418,7 +1428,6 @@ const categoryTotal = categoryTransactions.reduce(
 
               {/* Limited height so this area doesn't grow forever */}
               <div className="space-y-2 pr-1 max-h-56 overflow-y-auto budget-scroll">
-
                 {categories.map((cat) => {
                   const budget = categoryBudgets[cat.name] ?? 0;
                   const spent = expenseByCategory[cat.name] ?? 0;
@@ -1483,7 +1492,7 @@ const categoryTotal = categoryTransactions.reduce(
               </p>
             </div>
 
-            {/* Pro plan status */}
+            {/* PRO PLAN STATUS CARD */}
             <div className="bg-slate-900 rounded-lg border border-emerald-600/60 p-3">
               <h3 className="font-medium mb-1 text-xs text-emerald-300">
                 {isPro ? "Pro plan active" : "Free plan"}
@@ -1493,9 +1502,7 @@ const categoryTotal = categoryTransactions.reduce(
                 <>
                   <p className="text-slate-300">
                     You&apos;re currently using the{" "}
-                    <span className="font-semibold text-amber-300">
-                      Pro
-                    </span>{" "}
+                    <span className="font-semibold text-amber-300">Pro</span>{" "}
                     plan.
                   </p>
                   <p className="mt-1 text-slate-400">
@@ -1529,7 +1536,7 @@ const categoryTotal = categoryTransactions.reduce(
               )}
             </div>
 
-            {/* PIE CHART */}
+            {/* PIE CHART CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-4 flex flex-col items-center mt-2">
               <div className="text-[11px] text-slate-400 mb-2">
                 Spending vs income {windowDays}
@@ -1617,4 +1624,3 @@ const categoryTotal = categoryTransactions.reduce(
     </main>
   );
 }
-

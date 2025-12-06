@@ -35,3 +35,13 @@ body {
   height: 0;
   background: transparent;
 }
+/* Hide scrollbar for All Transactions list, but keep it scrollable */
+.transactions-scroll {
+  scrollbar-width: none;       /* Firefox */
+  -ms-overflow-style: none;    /* IE/Edge */
+}
+
+.transactions-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
