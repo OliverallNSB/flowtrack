@@ -1037,7 +1037,7 @@ export default function DashboardPage() {
           {/* ========================= */}
           {/* MAIN GRID (SUMMARY + LISTS) */}
           {/* ========================= */}
-          <div className="flex-1 grid grid-rows-[minmax(0,0.25fr),minmax(0,0.75fr)] gap-4 p-4">
+          <div className="flex-1 grid grid-rows-[minmax(0,0.18fr),minmax(0,0.82fr)] gap-4 p-4">
             {/* SUMMARY: INCOME / EXPENSES / NET */}
             <div className="grid md:grid-cols-3 gap-4">
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
