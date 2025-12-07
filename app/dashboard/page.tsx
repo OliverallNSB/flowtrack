@@ -1,7 +1,7 @@
 // app/dashboard/page.tsx
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseclient";
 import { useAuth } from "@/app/context/AuthContext";
@@ -58,6 +58,22 @@ function summarize(transactions: Transaction[]) {
   return { income, expenses, net };
 }
 
+// Global override to detect ISO dates anywhere and format automatically
+function displayDate(v: string) {
+  if (!v) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return formatDate(v); // convert YYYY-MM-DD → MM/DD/YYYY
+  return v; // otherwise print as-is
+}
+
+
+function formatDate(dateStr: string) {
+  const d = new Date(dateStr);
+  const mm = String(d.getMonth() + 1).padStart(2, "0"); // month is 0-based
+  const dd = String(d.getDate()).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${mm}/${dd}/${yyyy}`;
+}
+
 function formatCurrency(value: number) {
   return value.toLocaleString("en-US", {
     style: "currency",
@@ -75,9 +91,12 @@ function getSpendingRatio(income: number, expenses: number) {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, profile, loading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
-  const isPro = profile?.plan === "pro";
+  // ...your other state...
+  const categoryListRef = useRef<HTMLUListElement | null>(null); // 👈 add this
+  const [profile, setProfile] = useState<any>(null); // using any to avoid type import issues
+  const isPro = profile?.plan?.trim().toLowerCase() === "pro";
 
   // ---- TIME WINDOW (FREE vs PRO) ----
   const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90] : [7, 14, 30];
@@ -91,17 +110,18 @@ export default function DashboardPage() {
   // ---- USER & DATA STATE ----
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [selectedCategoryName, setSelectedCategoryName] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
+  const [highlightedTxId, setHighlightedTxId] = useState<string | null>(null);
+  
   // ---- CATEGORY STATE (LEFT BAR) ----
-  const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [categoriesLoaded, setCategoriesLoaded] = useState(false);
 
   const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryType, setNewCategoryType] =
-    useState<TransactionType>("expense");
+  const [newCategoryType, setNewCategoryType] = useState<TransactionType>("expense");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
@@ -113,9 +133,11 @@ export default function DashboardPage() {
 
   // ---- EDIT TRANSACTION (CENTER) ----
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editAmount, setEditAmount] = useState("");
-  const [editDate, setEditDate] = useState("");
-  const [editDescription, setEditDescription] = useState("");
+  const [editingAmount, setEditingAmount] = useState<string>("");
+
+  const [editingCategory, setEditingCategory] = useState<string>(""); 
+  const [editingDate, setEditingDate] = useState("");
+  const [editingDescription, setEditingDescription] = useState<string>("");
   const [editingSaving, setEditingSaving] = useState(false);
 
   // ---- QUICK ADD BAR (CENTER TOP) ----
@@ -124,7 +146,7 @@ export default function DashboardPage() {
   const [quickDate, setQuickDate] = useState("");
   const [quickDescription, setQuickDescription] = useState("");
   const [quickSaving, setQuickSaving] = useState(false);
-
+  
   // ---- SIMPLE BUDGETS (RIGHT SIDEBAR, LOCAL ONLY FOR NOW) ----
   const [categoryBudgets, setCategoryBudgets] = useState<Record<string, number>>(
     {}
@@ -186,6 +208,13 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    if (categoryListRef.current) {
+      categoryListRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [selectedCategoryName]); // <- use your actual selected category state here
+
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     try {
       window.localStorage.setItem(
@@ -212,6 +241,7 @@ export default function DashboardPage() {
   // ---- LOAD CATEGORY ORDER FROM SUPABASE ----
   useEffect(() => {
     if (!userId) return;
+    
 
     async function loadCategoryOrder() {
       console.log("Loading category order for user:", userId);
@@ -283,40 +313,44 @@ export default function DashboardPage() {
   }, [categories, userId, categoriesLoaded]);
 
   // ---- LOAD TRANSACTIONS FROM SUPABASE ----
-  useEffect(() => {
-    async function load() {
-      if (authLoading) return;
+// at top of component you already have:
+// const { user, loading: authLoading } = useAuth();
+// const [profile, setProfile] = useState<any>(null);
+// const isPro = profile?.plan?.trim().toLowerCase() === "pro";
 
-      if (!user) {
-        router.push("/login");
-        return;
-      }
+useEffect(() => {
+  if (authLoading) return;
+  if (!user) return;
 
-      setLoading(true);
-      setErrorMessage(null);
+  let cancelled = false;
 
-      setUserEmail(user.email ?? null);
-      setUserId(user.id);
+  async function loadProfile() {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("plan")
+      .eq("id", user?.id)      // matches the 'id' column in your profiles table
+      .maybeSingle();
 
-      const { data, error } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("user_id", user.id)
-        .gte("date", windowStartStr)
-        .order("date", { ascending: false });
-
-      if (error) {
-        setErrorMessage(error.message);
-        setTransactions([]);
-      } else {
-        setTransactions((data ?? []) as Transaction[]);
-      }
-
-      setLoading(false);
+    if (error) {
+      console.error("Error loading profile:", error);
+      return;
     }
 
-    load();
-  }, [user, authLoading, router, windowStartStr]);
+    if (!data || cancelled) {
+      console.log("No profile row found for user yet:", user?.id);
+      return;
+    }
+
+    console.log("Loaded profile:", data);
+    setProfile(data);
+  }
+
+  loadProfile();
+
+  return () => {
+    cancelled = true;
+  };
+}, [authLoading, user]);
 
   // ---- LOGOUT ----
   async function handleLogout() {
@@ -392,7 +426,8 @@ export default function DashboardPage() {
       .select("*")
       .eq("user_id", userId)
       .gte("date", windowStartStr)
-      .order("date", { ascending: false });
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false });
 
     if (txError) {
       setErrorMessage(txError.message);
@@ -406,7 +441,7 @@ export default function DashboardPage() {
     setExpandedCategory(null);
   }
 
-async function handleQuickAdd(e: FormEvent) {
+  async function handleQuickAdd(e: FormEvent) {
   e.preventDefault();
   setErrorMessage(null);
 
@@ -415,24 +450,32 @@ async function handleQuickAdd(e: FormEvent) {
     return;
   }
 
-  const catName = quickCategory.trim();
-  if (!catName) {
-    setErrorMessage("Choose a category.");
+  if (!quickCategory) {
+    setErrorMessage("Please choose a category.");
     return;
   }
 
-  // 🔍 Make sure we find the exact category the user selected
-  const cat = categories.find((c) => c.name === catName);
-
+  // 🔍 Find the matching category object
+  const cat = categories.find((c) => c.name === quickCategory);
+  
   if (!cat) {
-    console.error("QuickAdd: category not found", { catName, categories });
-    setErrorMessage(
-      "Something went wrong with the category selection. Please refresh and try again."
-    );
-    return;
+  console.warn("Quick Add: category not found", {
+    quickCategory,
+    categories: categories.map((c) => c.name),
+  });
+
+  // Try to auto-fix by resetting Quick Add to a valid category
+  if (categories.length > 0) {
+    setQuickCategory(categories[0].name);
   }
 
-  const type: TransactionType = cat.type; // ✅ guaranteed "income" or "expense"
+  setErrorMessage("Category not found for Quick Add. Please pick a category again.");
+  return;
+}
+
+
+  const catName = cat.name;
+  const type: TransactionType = cat.type;
 
   if (!quickAmount || !quickDate) {
     setErrorMessage("Please fill amount and date.");
@@ -453,64 +496,83 @@ async function handleQuickAdd(e: FormEvent) {
 
   setQuickSaving(true);
 
-  // 🪵 Helpful debug log (you'll see this in the browser DevTools console)
-  console.log("QuickAdd inserting:", {
-    userId,
+  console.log("Quick Add submit", {
+    quickCategory,
     catName,
     type,
     amountNumber,
-    date: quickDate,
-    description: quickDescription,
+    quickDate,
+    quickDescription,
   });
 
-  const { error } = await supabase.from("transactions").insert({
-    user_id: userId,
-    type,                // ✅ will be "income" for Deposits (Income)
-    amount: amountNumber,
-    date: quickDate,
-    category: catName,   // ✅ exactly the category you selected
-    description: quickDescription || null,
-  });
+  try {
+    // ⬇ INSERT and get the inserted row back
+    const { data: insertedRows, error: insertError } = await supabase
+      .from("transactions")
+      .insert({
+        user_id: userId,
+        type,
+        amount: amountNumber,
+        date: quickDate,
+        category: catName, // ✅ resolved category name
+        description: quickDescription || null,
+      })
+      .select(); // <-- important so we get the new id
 
-  if (error) {
-    setErrorMessage(error.message);
+    if (insertError) {
+      console.error("Quick Add insert error:", insertError);
+      setErrorMessage(insertError.message);
+      return;
+    }
+
+    let newId: string | null = null;
+    if (insertedRows && insertedRows.length > 0) {
+      newId = insertedRows[0].id as string;
+    }
+
+    // 🔁 Reload the window's transactions so category cards & totals update
+    const { data, error: txError } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("user_id", userId)
+      .gte("date", windowStartStr)
+      .order("date", { ascending: false });
+
+    if (txError) {
+      console.error("Quick Add reload error:", txError);
+      setErrorMessage(txError.message);
+    } else {
+      setTransactions((data ?? []) as Transaction[]);
+    }
+
+    // ✨ Highlight the new transaction row (Option C)
+    if (newId) {
+      setHighlightedTxId(newId);
+    }
+
+    // 🔄 Reset inputs
+    setQuickAmount("");
+    setQuickDescription("");
+    setQuickDate(todayStr);
+    // ⚠️ do NOT reset quickCategory, so the user can add multiple in same category
+  } finally {
     setQuickSaving(false);
-    return;
   }
-
-  // Reload recent transactions so the UI updates
-  const { data, error: txError } = await supabase
-    .from("transactions")
-    .select("*")
-    .eq("user_id", userId)
-    .gte("date", windowStartStr)
-    .order("date", { ascending: false });
-
-  if (txError) {
-    setErrorMessage(txError.message);
-  } else {
-    setTransactions((data ?? []) as Transaction[]);
-  }
-
-  setQuickSaving(false);
-  setQuickAmount("");
-  setQuickDescription("");
-  setQuickDate(todayStr);
 }
-
 
   function startEdit(t: Transaction) {
     setEditingId(t.id);
-    setEditAmount(String(t.amount));
-    setEditDate(t.date);
-    setEditDescription(t.description ?? "");
+    setEditingAmount(String(t.amount));
+    setEditingCategory(t.category);
+    setEditingDate(t.date);
+    setEditingDescription(t.description ?? "");
   }
 
   function cancelEdit() {
     setEditingId(null);
-    setEditAmount("");
-    setEditDate("");
-    setEditDescription("");
+    setEditingAmount("");
+    setEditingDate("");
+    setEditingDescription("");
     setEditingSaving(false);
   }
 
@@ -520,18 +582,18 @@ async function handleQuickAdd(e: FormEvent) {
 
     if (!editingId || !userId) return;
 
-    if (!editAmount || !editDate) {
+    if (!editingAmount || !editingDate) {
       setErrorMessage("Please fill amount and date.");
       return;
     }
 
-    const amountNumber = Number(editAmount);
+    const amountNumber = Number(editingAmount);
     if (Number.isNaN(amountNumber) || amountNumber <= 0) {
       setErrorMessage("Amount must be a positive number.");
       return;
     }
 
-    const chosen = new Date(editDate);
+    const chosen = new Date(editingDate);
     if (chosen < windowStart || chosen > today) {
       setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
       return;
@@ -543,8 +605,8 @@ async function handleQuickAdd(e: FormEvent) {
       .from("transactions")
       .update({
         amount: amountNumber,
-        date: editDate,
-        description: editDescription || null,
+        date: editingDate,
+        description: editingDescription || null,
       })
       .eq("id", editingId)
       .eq("user_id", userId);
@@ -639,11 +701,65 @@ async function handleQuickAdd(e: FormEvent) {
     if (!quickDate) setQuickDate(todayStr);
   }, [formDate, quickDate, todayStr]);
 
+ useEffect(() => {
+  if (categories.length === 0) return;
+
+  // Does the current quickCategory still exist?
+  const exists = categories.some((c) => c.name === quickCategory);
+
+  // If nothing selected yet OR the selected one was renamed/deleted,
+  // reset Quick Add to the first category.
+  if (!quickCategory || !exists) {
+    setQuickCategory(categories[0].name);
+  }
+}, [categories, quickCategory]);
+
+
   useEffect(() => {
-    if (!quickCategory && categories.length > 0) {
-      setQuickCategory(categories[0].name);
+  if (!highlightedTxId) return;
+
+  const timer = setTimeout(() => {
+    setHighlightedTxId(null);
+  }, 2000);
+
+  return () => clearTimeout(timer);
+}, [highlightedTxId]);
+
+useEffect(() => {
+  if (!userId) return;
+
+  let cancelled = false;
+
+  async function loadProfile() {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("plan")
+      .eq("id", userId)   // matches the 'id' column in your screenshot
+      .maybeSingle();
+
+    if (error) {
+      console.error("Error loading profile:", {
+        message: (error as any).message,
+        details: (error as any).details,
+        hint: (error as any).hint,
+        code: (error as any).code,
+      });
+      return;
     }
-  }, [quickCategory, categories]);
+
+    if (!data || cancelled) return;
+
+    setProfile(data);
+  }
+
+  loadProfile();
+
+  return () => {
+    cancelled = true;
+  };
+}, [userId]);
+
+
 
   // ---- DERIVED VALUES ----
   const { income, expenses, net } = summarize(transactions);
@@ -684,10 +800,10 @@ async function handleQuickAdd(e: FormEvent) {
     .slice(0, 3);
 
   // ---- LOADING / REDIRECT ----
-  if (authLoading || loading) {
+  if (authLoading) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100">
-        <p className="text-sm text-slate-300">Loading your dashboard...</p>
+      <main className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
+        <p className="text-sm text-slate-400">Loading your session...</p>
       </main>
     );
   }
@@ -1000,15 +1116,18 @@ async function handleQuickAdd(e: FormEvent) {
           </header>
 
           {/* QUICK ADD BAR */}
-          <div className="border-b border-slate-900 bg-slate-950/80 px-4 py-2 text-[11px]">
+          <div className="border-b border-slate-900 bg-slate-950/90 px-4 py-3 text-[11px]">
             <form
               onSubmit={handleQuickAdd}
-              className="flex flex-wrap items-center gap-2"
+              className="flex flex-wrap items-center gap-2 md:gap-3"
             >
-              <span className="text-slate-400 mr-2">Quick add:</span>
+              <span className="text-slate-400 mr-1 whitespace-nowrap">
+                Quick add:
+              </span>
 
+              {/* Category */}
               <select
-                className="rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+                className="rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs min-w-[160px] focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
                 value={quickCategory}
                 onChange={(e) => setQuickCategory(e.target.value)}
               >
@@ -1019,42 +1138,48 @@ async function handleQuickAdd(e: FormEvent) {
                 ))}
               </select>
 
+              {/* Amount */}
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={quickAmount}
                 onChange={(e) => setQuickAmount(e.target.value)}
-                className="w-24 rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+                className="w-24 rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
                 placeholder="Amount"
               />
 
+              {/* Date */}
               <input
                 type="date"
                 min={windowStartStr}
                 max={todayStr}
                 value={quickDate}
                 onChange={(e) => setQuickDate(e.target.value)}
-                className="rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+                className="rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
               />
 
+              {/* Note */}
               <input
                 type="text"
                 value={quickDescription}
                 onChange={(e) => setQuickDescription(e.target.value)}
-                className="flex-1 min-w-[120px] rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+                className="flex-1 min-w-[140px] rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
                 placeholder="Optional note"
               />
 
+              {/* Button */}
               <button
                 type="submit"
                 disabled={quickSaving}
-                className="rounded-md bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 px-3 py-1 text-[11px] font-medium"
+                className="rounded-md bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 px-4 py-1.5 text-[11px] font-semibold tracking-wide transition-colors"
               >
                 {quickSaving ? "Adding..." : "Add"}
               </button>
             </form>
           </div>
+
+
 
           {/* ========================= */}
           {/* MAIN GRID (SUMMARY + LISTS) */}
@@ -1178,9 +1303,9 @@ async function handleQuickAdd(e: FormEvent) {
                               type="number"
                               min="0"
                               step="0.01"
-                              value={editAmount}
+                              value={editingAmount}
                               onChange={(e) =>
-                                setEditAmount(e.target.value)
+                                setEditingAmount(e.target.value)
                               }
                               className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
                             />
@@ -1196,9 +1321,9 @@ async function handleQuickAdd(e: FormEvent) {
                               type="date"
                               min={windowStartStr}
                               max={todayStr}
-                              value={editDate}
+                              value={editingDate}
                               onChange={(e) =>
-                                setEditDate(e.target.value)
+                                setEditingDate(e.target.value)
                               }
                               className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
                             />
@@ -1211,9 +1336,9 @@ async function handleQuickAdd(e: FormEvent) {
                           </label>
                           <input
                             type="text"
-                            value={editDescription}
+                            value={editingDescription}
                             onChange={(e) =>
-                              setEditDescription(e.target.value)
+                              setEditingDescription(e.target.value)
                             }
                             className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
                           />
@@ -1238,11 +1363,116 @@ async function handleQuickAdd(e: FormEvent) {
                       </form>
                     )}
 
-                    <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1">
+                      {editingId && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+                          <div className="w-full max-w-md rounded-xl bg-slate-900 border border-slate-700 p-5 shadow-2xl space-y-4">
+                            
+                            {/* Header */}
+                            <div className="flex items-center justify-between">
+                              <h2 className="text-sm font-semibold text-slate-100">Edit Transaction</h2>
+                              <button
+                                type="button"
+                                onClick={cancelEdit}
+                                className="text-slate-400 hover:text-slate-100 text-xs"
+                              >✕</button>
+                            </div>
+
+                            {/* Edit FORM */}
+                            <form onSubmit={handleSaveEdit} className="space-y-3 text-xs">
+                              
+                              {/* AMOUNT */}
+                              <div className="flex flex-col gap-1">
+                                <label className="text-slate-300">Amount</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={editingAmount}
+                                  onChange={(e) => setEditingAmount(e.target.value)}
+                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1 
+                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+
+                              {/* CATEGORY */}
+                              <div className="flex flex-col gap-1">
+                                <label className="text-slate-300">Category</label>
+                                <select
+                                  value={editingCategory}
+                                  onChange={(e) => setEditingCategory(e.target.value)}
+                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
+                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                >
+                                  {categories.map((cat) => (
+                                    <option key={cat.name} value={cat.name}>{cat.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              {/* DATE */}
+                              <div className="flex flex-col gap-1">
+                                <label className="text-slate-300">Date</label>
+                                <input
+                                  type="date"
+                                  value={editingDate}
+                                  onChange={(e) => setEditingDate(e.target.value)}
+                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
+                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+
+                              {/* NOTE */}
+                              <div className="flex flex-col gap-1">
+                                <label className="text-slate-300">Description</label>
+                                <input
+                                  type="text"
+                                  value={editingDescription}
+                                  onChange={(e) => setEditingDescription(e.target.value)}
+                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
+                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                  placeholder="Optional note"
+                                />
+                              </div>
+
+                              {/* BUTTONS */}
+                              <div className="flex justify-end gap-2 pt-2">
+                                <button
+                                  type="button"
+                                  onClick={cancelEdit}
+                                  className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-200 text-[11px]"
+                                >Cancel</button>
+
+                                <button
+                                  type="submit"
+                                  disabled={editingSaving}
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400
+                                            disabled:opacity-60 text-[11px] font-medium"
+                                >
+                                  {editingSaving ? "Saving..." : "Save Changes"}
+                                </button>
+                              </div>
+
+                            </form>
+                          </div>
+                        </div>
+                      )}
+
+
+                    <ul
+                      ref={categoryListRef}
+                      className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll"
+                    >
                       {categoryTransactions.map((t) => (
                         <li
                           key={t.id}
-                          className="flex items-center justify-between border-b border-slate-800/80 pb-1"
+                          className={`
+                            flex items-center justify-between rounded-md px-2 py-1.5
+                            border border-transparent
+                            ${t.id === highlightedTxId
+                              ? "bg-emerald-900/40 border-emerald-500/60"
+                              : "hover:bg-slate-800/60 border-slate-800/80"}
+                            transition-colors
+                          `}
                         >
                           <div>
                             <div className="font-medium">
@@ -1250,24 +1480,23 @@ async function handleQuickAdd(e: FormEvent) {
                               {formatCurrency(Number(t.amount))}
                             </div>
                             <div className="text-[11px] text-slate-400">
-                              {t.date}
+                              {formatDate(t.date)}
                               {t.description ? ` • ${t.description}` : ""}
                             </div>
                           </div>
+
                           <div className="flex items-center gap-1 ml-2">
                             <button
                               type="button"
                               onClick={() => startEdit(t)}
-                              className="px-2 py-1 rounded-md border border-slate-600 text-[10px] text-slate-200 hover:bg-slate-800"
+                              className="px-2 py-1 rounded-md border border-slate-600 text-[10px] text-slate-200 hover:bg-slate-800 transition-colors"
                             >
                               Edit
                             </button>
                             <button
                               type="button"
-                              onClick={() =>
-                                handleDeleteTransaction(t.id)
-                              }
-                              className="px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20"
+                              onClick={() => handleDeleteTransaction(t.id)}
+                              className="px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20 transition-colors"
                             >
                               Delete
                             </button>
@@ -1290,32 +1519,42 @@ async function handleQuickAdd(e: FormEvent) {
                     No transactions yet in the last {windowDays} days.
                   </p>
                 ) : (
-                  <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
-                    {transactions.map((t) => (
-                      <li
-                        key={t.id}
-                        className="flex items-center justify-between border-b border-slate-800/80 pb-1"
-                      >
-                        <div>
-                          <div className="font-medium">
-                            {t.type === "income" ? "+" : "-"}
-                            {formatCurrency(Number(t.amount))}
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {t.category} • {t.date}
-                            {t.description ? ` • ${t.description}` : ""}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteTransaction(t.id)}
-                          className="ml-2 px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20"
-                        >
-                          Delete
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                 <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
+                {transactions.map((t) => (
+                  <li
+                    key={t.id}
+                    className={`
+                      flex items-center justify-between rounded-md px-2 py-1.5
+                      border border-transparent
+                      ${t.id === highlightedTxId
+                        ? "bg-emerald-900/40 border-emerald-500/60"
+                        : "hover:bg-slate-800/60 border-slate-800/80"}
+                      transition-colors
+                    `}
+                  >
+                    <div>
+                      <div className="font-medium">
+                        {t.type === "income" ? "+" : "-"}
+                        {formatCurrency(Number(t.amount))}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {t.category} • {formatDate(t.date)}
+                        {t.description ? ` • ${t.description}` : ""}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteTransaction(t.id)}
+                      className="ml-2 px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20 transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </li>
+                ))}
+              </ul>
+
+
                 )}
               </div>
             </div>

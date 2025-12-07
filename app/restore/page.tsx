@@ -1,9 +1,10 @@
-// app/restore/page.tsx
+// app/dashboard/page.tsx
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseclient";
+import { useAuth } from "@/app/context/AuthContext";
 
 type TransactionType = "income" | "expense";
 
@@ -23,6 +24,27 @@ type Category = {
   type: TransactionType;
 };
 
+// ---- DEFAULTS & STORAGE KEYS ----
+
+const DEFAULT_CATEGORIES: Category[] = [
+  { name: "Rent / Mortgage", type: "expense" },
+  { name: "Groceries", type: "expense" },
+  { name: "Dining Out", type: "expense" },
+  { name: "Transportation", type: "expense" },
+  { name: "Utilities", type: "expense" },
+  { name: "Debt Payments", type: "expense" },
+  { name: "Subscriptions", type: "expense" },
+  { name: "Salary / Wages", type: "income" },
+  { name: "Side Income", type: "income" },
+];
+
+const DEFAULT_CATEGORY_BUDGETS: Record<string, number> = {};
+
+const CATEGORIES_STORAGE_KEY = "ft_categories_v1";
+const BUDGETS_STORAGE_KEY = "ft_category_budgets_v1";
+
+// ---- HELPERS ----
+
 function summarize(transactions: Transaction[]) {
   const income = transactions
     .filter((t) => t.type === "income")
@@ -34,6 +56,22 @@ function summarize(transactions: Transaction[]) {
 
   const net = income - expenses;
   return { income, expenses, net };
+}
+
+// Global override to detect ISO dates anywhere and format automatically
+function displayDate(v: string) {
+  if (!v) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return formatDate(v); // convert YYYY-MM-DD → MM/DD/YYYY
+  return v; // otherwise print as-is
+}
+
+
+function formatDate(dateStr: string) {
+  const d = new Date(dateStr);
+  const mm = String(d.getMonth() + 1).padStart(2, "0"); // month is 0-based
+  const dd = String(d.getDate()).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${mm}/${dd}/${yyyy}`;
 }
 
 function formatCurrency(value: number) {
@@ -53,110 +91,274 @@ function getSpendingRatio(income: number, expenses: number) {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
 
-  // Date window (free plan: 30 days)
+  // ...your other state...
+  const categoryListRef = useRef<HTMLUListElement | null>(null); // 👈 add this
+  const [profile, setProfile] = useState<any>(null); // using any to avoid type import issues
+  const isPro = profile?.plan?.trim().toLowerCase() === "pro";
+
+  // ---- TIME WINDOW (FREE vs PRO) ----
+  const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90] : [7, 14, 30];
+  const [windowDays, setWindowDays] = useState<number>(isPro ? 90 : 30);
+
   const today = new Date();
-  const thirtyDaysAgo = new Date(today.getTime() - 30 * 86400000);
+  const windowStart = new Date(today.getTime() - windowDays * 86400000);
   const todayStr = today.toISOString().slice(0, 10);
-  const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().slice(0, 10);
+  const windowStartStr = windowStart.toISOString().slice(0, 10);
 
-  // User & data
+  // ---- USER & DATA STATE ----
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [selectedCategoryName, setSelectedCategoryName] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [highlightedTxId, setHighlightedTxId] = useState<string | null>(null);
+  
+  // ---- CATEGORY STATE (LEFT BAR) ----
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
 
-  // Categories
-  const [categories, setCategories] = useState<Category[]>([
-    { name: "Rent / Mortgage", type: "expense" },
-    { name: "Groceries", type: "expense" },
-    { name: "Dining Out", type: "expense" },
-    { name: "Transportation", type: "expense" },
-    { name: "Utilities", type: "expense" },
-    { name: "Debt Payments", type: "expense" },
-    { name: "Subscriptions", type: "expense" },
-    { name: "Salary / Wages", type: "income" },
-    { name: "Side Income", type: "income" },
-  ]);
   const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryType, setNewCategoryType] =
-    useState<TransactionType>("expense");
+  const [newCategoryType, setNewCategoryType] = useState<TransactionType>("expense");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
-  // Inline category form
+  // ---- INLINE ENTRY FORM (LEFT BAR) ----
   const [formAmount, setFormAmount] = useState("");
   const [formDate, setFormDate] = useState("");
   const [formDescription, setFormDescription] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Edit transaction
+  // ---- EDIT TRANSACTION (CENTER) ----
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editAmount, setEditAmount] = useState("");
-  const [editDate, setEditDate] = useState("");
-  const [editDescription, setEditDescription] = useState("");
+  const [editingAmount, setEditingAmount] = useState<string>("");
+
+  const [editingCategory, setEditingCategory] = useState<string>(""); 
+  const [editingDate, setEditingDate] = useState("");
+  const [editingDescription, setEditingDescription] = useState<string>("");
   const [editingSaving, setEditingSaving] = useState(false);
 
-  // Quick Add bar
+  // ---- QUICK ADD BAR (CENTER TOP) ----
   const [quickCategory, setQuickCategory] = useState<string>("");
   const [quickAmount, setQuickAmount] = useState("");
   const [quickDate, setQuickDate] = useState("");
   const [quickDescription, setQuickDescription] = useState("");
   const [quickSaving, setQuickSaving] = useState(false);
+  
+  // ---- SIMPLE BUDGETS (RIGHT SIDEBAR, LOCAL ONLY FOR NOW) ----
+  const [categoryBudgets, setCategoryBudgets] = useState<Record<string, number>>(
+    {}
+  );
 
-  // Simple budgets per category (local-only for now)
-  const [categoryBudgets, setCategoryBudgets] = useState<Record<string, number>>({
-    "Rent / Mortgage": 2000,
-    Groceries: 400,
-    "Dining Out": 200,
-    Transportation: 250,
-    Utilities: 300,
-  });
-
-  // Load user + transactions
+  // Load budgets from localStorage
   useEffect(() => {
-    async function load() {
-      setLoading(true);
-      setErrorMessage(null);
+    try {
+      const saved = localStorage.getItem("ft-budgets");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === "object") {
+          setCategoryBudgets(parsed);
+        }
+      }
+    } catch (err) {
+      console.error("Error loading budgets:", err);
+    }
+  }, []);
 
-      const { data: userData, error: userError } = await supabase.auth.getUser();
-      if (userError || !userData?.user) {
-        router.push("/login");
+  // Save budgets to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem("ft-budgets", JSON.stringify(categoryBudgets));
+    } catch (err) {
+      console.error("Error saving budgets:", err);
+    }
+  }, [categoryBudgets]);
+
+  // ---- LOAD / SAVE CATEGORIES & BUDGETS (LEFT BAR ORDER + BUDGETS) ----
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    try {
+      const storedCats = window.localStorage.getItem(CATEGORIES_STORAGE_KEY);
+      if (storedCats) {
+        const parsed = JSON.parse(storedCats) as Category[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCategories(parsed);
+        }
+      }
+
+      const storedBudgets = window.localStorage.getItem(BUDGETS_STORAGE_KEY);
+      if (storedBudgets) {
+        const parsedBudgets = JSON.parse(storedBudgets) as Record<
+          string,
+          number
+        >;
+        if (parsedBudgets && typeof parsedBudgets === "object") {
+          setCategoryBudgets((prev) => ({
+            ...prev,
+            ...parsedBudgets,
+          }));
+        }
+      }
+    } catch {
+      // ignore parsing errors
+    }
+  }, []);
+
+  useEffect(() => {
+    if (categoryListRef.current) {
+      categoryListRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [selectedCategoryName]); // <- use your actual selected category state here
+
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        CATEGORIES_STORAGE_KEY,
+        JSON.stringify(categories)
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [categories]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        BUDGETS_STORAGE_KEY,
+        JSON.stringify(categoryBudgets)
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [categoryBudgets]);
+
+  // ---- LOAD CATEGORY ORDER FROM SUPABASE ----
+  useEffect(() => {
+    if (!userId) return;
+    
+
+    async function loadCategoryOrder() {
+      console.log("Loading category order for user:", userId);
+
+      const { data, error } = await supabase
+        .from("users")
+        .select("category_order")
+        .eq("id", userId)
+        .single();
+
+      if (error) {
+        console.warn("Could not load category order:", error.message);
+        // Fall back to defaults
+        setCategories(DEFAULT_CATEGORIES);
+        setCategoriesLoaded(true);
         return;
       }
 
-      const user = userData.user;
-      setUserEmail(user.email ?? null);
-      setUserId(user.id);
+      const saved = data?.category_order;
 
-      const { data, error } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("user_id", user.id)
-        .gte("date", thirtyDaysAgoStr)
-        .order("date", { ascending: false });
-
-      if (error) {
-        setErrorMessage(error.message);
-        setTransactions([]);
+      if (Array.isArray(saved) && saved.length > 0) {
+        console.log("Using saved category order from Supabase:", saved);
+        const restored: Category[] = saved.map((item: any) => ({
+          name: item.name,
+          type: item.type as TransactionType,
+        }));
+        setCategories(restored);
+        setCategoriesLoaded(true);
       } else {
-        setTransactions((data ?? []) as Transaction[]);
+        console.log("No saved category order; using defaults");
+        setCategories(DEFAULT_CATEGORIES);
+        setCategoriesLoaded(true);
       }
-
-      setLoading(false);
     }
 
-    load();
-  }, [router, thirtyDaysAgoStr]);
+    loadCategoryOrder();
+  }, [userId]);
 
+  // ---- SAVE CATEGORY ORDER TO SUPABASE ----
+  useEffect(() => {
+    if (!userId || !categoriesLoaded) {
+      if (!categoriesLoaded) {
+        console.log("Skip saving categories: not loaded from DB yet");
+      }
+      return;
+    }
+
+    console.log("Saving category order to Supabase:", categories);
+
+    async function saveCategoryOrder() {
+      const payload = categories.map((c) => ({
+        name: c.name,
+        type: c.type,
+      }));
+
+      const { error } = await supabase
+        .from("users")
+        .update({ category_order: payload })
+        .eq("id", userId);
+
+      if (error) {
+        console.error("Error saving category order:", error.message);
+      } else {
+        console.log("Successfully saved category order!");
+      }
+    }
+
+    saveCategoryOrder();
+  }, [categories, userId, categoriesLoaded]);
+
+  // ---- LOAD TRANSACTIONS FROM SUPABASE ----
+// at top of component you already have:
+// const { user, loading: authLoading } = useAuth();
+// const [profile, setProfile] = useState<any>(null);
+// const isPro = profile?.plan?.trim().toLowerCase() === "pro";
+
+useEffect(() => {
+  if (authLoading) return;
+  if (!user) return;
+
+  let cancelled = false;
+
+  async function loadProfile() {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("plan")
+      .eq("id", user?.id)      // matches the 'id' column in your profiles table
+      .maybeSingle();
+
+    if (error) {
+      console.error("Error loading profile:", error);
+      return;
+    }
+
+    if (!data || cancelled) {
+      console.log("No profile row found for user yet:", user?.id);
+      return;
+    }
+
+    console.log("Loaded profile:", data);
+    setProfile(data);
+  }
+
+  loadProfile();
+
+  return () => {
+    cancelled = true;
+  };
+}, [authLoading, user]);
+
+  // ---- LOGOUT ----
   async function handleLogout() {
     await supabase.auth.signOut();
     router.push("/login");
   }
 
-  // ----- CATEGORY & ENTRY HANDLERS -----
-
+  // ---- CATEGORY & ENTRY HANDLERS (LEFT BAR + CENTER) ----
   function handleAddCategory(e: FormEvent) {
     e.preventDefault();
     const name = newCategoryName.trim();
@@ -197,8 +399,8 @@ export default function DashboardPage() {
     }
 
     const chosen = new Date(formDate);
-    if (chosen < thirtyDaysAgo || chosen > today) {
-      setErrorMessage("Free version: only last 30 days allowed.");
+    if (chosen < windowStart || chosen > today) {
+      setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
       return;
     }
 
@@ -223,8 +425,9 @@ export default function DashboardPage() {
       .from("transactions")
       .select("*")
       .eq("user_id", userId)
-      .gte("date", thirtyDaysAgoStr)
-      .order("date", { ascending: false });
+      .gte("date", windowStartStr)
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false });
 
     if (txError) {
       setErrorMessage(txError.message);
@@ -239,88 +442,137 @@ export default function DashboardPage() {
   }
 
   async function handleQuickAdd(e: FormEvent) {
-    e.preventDefault();
-    setErrorMessage(null);
+  e.preventDefault();
+  setErrorMessage(null);
 
-    if (!userId) {
-      setErrorMessage("You must be logged in to add entries.");
+  if (!userId) {
+    setErrorMessage("You must be logged in to add entries.");
+    return;
+  }
+
+  if (!quickCategory) {
+    setErrorMessage("Please choose a category.");
+    return;
+  }
+
+  // 🔍 Find the matching category object
+  const cat = categories.find((c) => c.name === quickCategory);
+  
+  if (!cat) {
+  console.warn("Quick Add: category not found", {
+    quickCategory,
+    categories: categories.map((c) => c.name),
+  });
+
+  // Try to auto-fix by resetting Quick Add to a valid category
+  if (categories.length > 0) {
+    setQuickCategory(categories[0].name);
+  }
+
+  setErrorMessage("Category not found for Quick Add. Please pick a category again.");
+  return;
+}
+
+
+  const catName = cat.name;
+  const type: TransactionType = cat.type;
+
+  if (!quickAmount || !quickDate) {
+    setErrorMessage("Please fill amount and date.");
+    return;
+  }
+
+  const amountNumber = Number(quickAmount);
+  if (Number.isNaN(amountNumber) || amountNumber <= 0) {
+    setErrorMessage("Amount must be a positive number.");
+    return;
+  }
+
+  const chosen = new Date(quickDate);
+  if (chosen < windowStart || chosen > today) {
+    setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
+    return;
+  }
+
+  setQuickSaving(true);
+
+  console.log("Quick Add submit", {
+    quickCategory,
+    catName,
+    type,
+    amountNumber,
+    quickDate,
+    quickDescription,
+  });
+
+  try {
+    // ⬇ INSERT and get the inserted row back
+    const { data: insertedRows, error: insertError } = await supabase
+      .from("transactions")
+      .insert({
+        user_id: userId,
+        type,
+        amount: amountNumber,
+        date: quickDate,
+        category: catName, // ✅ resolved category name
+        description: quickDescription || null,
+      })
+      .select(); // <-- important so we get the new id
+
+    if (insertError) {
+      console.error("Quick Add insert error:", insertError);
+      setErrorMessage(insertError.message);
       return;
     }
 
-    const catName = quickCategory.trim();
-    if (!catName) {
-      setErrorMessage("Choose a category.");
-      return;
+    let newId: string | null = null;
+    if (insertedRows && insertedRows.length > 0) {
+      newId = insertedRows[0].id as string;
     }
 
-    const cat = categories.find((c) => c.name === catName);
-    const type: TransactionType = cat ? cat.type : "expense";
-
-    if (!quickAmount || !quickDate) {
-      setErrorMessage("Please fill amount and date.");
-      return;
-    }
-
-    const amountNumber = Number(quickAmount);
-    if (Number.isNaN(amountNumber) || amountNumber <= 0) {
-      setErrorMessage("Amount must be a positive number.");
-      return;
-    }
-
-    const chosen = new Date(quickDate);
-    if (chosen < thirtyDaysAgo || chosen > today) {
-      setErrorMessage("Free version: only last 30 days allowed.");
-      return;
-    }
-
-    setQuickSaving(true);
-
-    const { error } = await supabase.from("transactions").insert({
-      user_id: userId,
-      type,
-      amount: amountNumber,
-      date: quickDate,
-      category: catName,
-      description: quickDescription || null,
-    });
-
-    if (error) {
-      setErrorMessage(error.message);
-      setQuickSaving(false);
-      return;
-    }
-
+    // 🔁 Reload the window's transactions so category cards & totals update
     const { data, error: txError } = await supabase
       .from("transactions")
       .select("*")
       .eq("user_id", userId)
-      .gte("date", thirtyDaysAgoStr)
+      .gte("date", windowStartStr)
       .order("date", { ascending: false });
 
     if (txError) {
+      console.error("Quick Add reload error:", txError);
       setErrorMessage(txError.message);
     } else {
       setTransactions((data ?? []) as Transaction[]);
     }
 
+    // ✨ Highlight the new transaction row (Option C)
+    if (newId) {
+      setHighlightedTxId(newId);
+    }
+
+    // 🔄 Reset inputs
     setQuickAmount("");
     setQuickDescription("");
     setQuickDate(todayStr);
+    // ⚠️ do NOT reset quickCategory, so the user can add multiple in same category
+  } finally {
     setQuickSaving(false);
   }
+}
 
   function startEdit(t: Transaction) {
     setEditingId(t.id);
-    setEditAmount(String(t.amount));
-    setEditDate(t.date);
-    setEditDescription(t.description ?? "");
+    setEditingAmount(String(t.amount));
+    setEditingCategory(t.category);
+    setEditingDate(t.date);
+    setEditingDescription(t.description ?? "");
   }
 
   function cancelEdit() {
     setEditingId(null);
-    setEditAmount("");
-    setEditDate("");
-    setEditDescription("");
+    setEditingAmount("");
+    setEditingDate("");
+    setEditingDescription("");
     setEditingSaving(false);
   }
 
@@ -330,20 +582,20 @@ export default function DashboardPage() {
 
     if (!editingId || !userId) return;
 
-    if (!editAmount || !editDate) {
+    if (!editingAmount || !editingDate) {
       setErrorMessage("Please fill amount and date.");
       return;
     }
 
-    const amountNumber = Number(editAmount);
+    const amountNumber = Number(editingAmount);
     if (Number.isNaN(amountNumber) || amountNumber <= 0) {
       setErrorMessage("Amount must be a positive number.");
       return;
     }
 
-    const chosen = new Date(editDate);
-    if (chosen < thirtyDaysAgo || chosen > today) {
-      setErrorMessage("Free version: only last 30 days allowed.");
+    const chosen = new Date(editingDate);
+    if (chosen < windowStart || chosen > today) {
+      setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
       return;
     }
 
@@ -353,8 +605,8 @@ export default function DashboardPage() {
       .from("transactions")
       .update({
         amount: amountNumber,
-        date: editDate,
-        description: editDescription || null,
+        date: editingDate,
+        description: editingDescription || null,
       })
       .eq("id", editingId)
       .eq("user_id", userId);
@@ -369,7 +621,7 @@ export default function DashboardPage() {
       .from("transactions")
       .select("*")
       .eq("user_id", userId)
-      .gte("date", thirtyDaysAgoStr)
+      .gte("date", windowStartStr)
       .order("date", { ascending: false });
 
     if (txError) {
@@ -408,7 +660,7 @@ export default function DashboardPage() {
       .from("transactions")
       .select("*")
       .eq("user_id", userId)
-      .gte("date", thirtyDaysAgoStr)
+      .gte("date", windowStartStr)
       .order("date", { ascending: false });
 
     if (txError) {
@@ -443,19 +695,73 @@ export default function DashboardPage() {
     });
   }
 
-  // Defaults for dates & quick category
+  // ---- DEFAULT DATES & QUICK CATEGORY ----
   useEffect(() => {
     if (!formDate) setFormDate(todayStr);
     if (!quickDate) setQuickDate(todayStr);
   }, [formDate, quickDate, todayStr]);
 
-  useEffect(() => {
-    if (!quickCategory && categories.length > 0) {
-      setQuickCategory(categories[0].name);
-    }
-  }, [quickCategory, categories]);
+ useEffect(() => {
+  if (categories.length === 0) return;
 
-  // Derived values
+  // Does the current quickCategory still exist?
+  const exists = categories.some((c) => c.name === quickCategory);
+
+  // If nothing selected yet OR the selected one was renamed/deleted,
+  // reset Quick Add to the first category.
+  if (!quickCategory || !exists) {
+    setQuickCategory(categories[0].name);
+  }
+}, [categories, quickCategory]);
+
+
+  useEffect(() => {
+  if (!highlightedTxId) return;
+
+  const timer = setTimeout(() => {
+    setHighlightedTxId(null);
+  }, 2000);
+
+  return () => clearTimeout(timer);
+}, [highlightedTxId]);
+
+useEffect(() => {
+  if (!userId) return;
+
+  let cancelled = false;
+
+  async function loadProfile() {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("plan")
+      .eq("id", userId)   // matches the 'id' column in your screenshot
+      .maybeSingle();
+
+    if (error) {
+      console.error("Error loading profile:", {
+        message: (error as any).message,
+        details: (error as any).details,
+        hint: (error as any).hint,
+        code: (error as any).code,
+      });
+      return;
+    }
+
+    if (!data || cancelled) return;
+
+    setProfile(data);
+  }
+
+  loadProfile();
+
+  return () => {
+    cancelled = true;
+  };
+}, [userId]);
+
+
+
+  // ---- DERIVED VALUES ----
   const { income, expenses, net } = summarize(transactions);
 
   let status: "OK" | "WARNING" | "DANGER" = "OK";
@@ -469,6 +775,13 @@ export default function DashboardPage() {
   const categoryTransactions = selectedCategory
     ? transactions.filter((t) => t.category === selectedCategory)
     : [];
+
+  const categoryTotal = categoryTransactions.reduce(
+    (sum, t) =>
+      sum +
+      (t.type === "expense" ? -Number(t.amount) : Number(t.amount)),
+    0
+  );
 
   const savingsRate = income > 0 ? Math.round((net / income) * 100) : null;
 
@@ -486,29 +799,40 @@ export default function DashboardPage() {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3);
 
-  if (loading) {
+  // ---- LOADING / REDIRECT ----
+  if (authLoading) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100">
-        <p className="text-sm text-slate-300">Loading your dashboard...</p>
+      <main className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
+        <p className="text-sm text-slate-400">Loading your session...</p>
       </main>
     );
   }
 
+  if (!user) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100">
+        <p className="text-sm text-slate-300">Redirecting to login...</p>
+      </main>
+    );
+  }
+
+  // ---- MAIN LAYOUT ----
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <div className="flex min-h-screen">
-        {/* LEFT SIDEBAR */}
+        {/* ========================= */}
+        {/* LEFT SIDEBAR             */}
+        {/* ========================= */}
         <aside className="w-64 border-r border-slate-800 bg-slate-950/80 flex flex-col">
           <div className="px-4 py-4 border-b border-slate-800">
-            <h2 className="text-sm font-semibold tracking-wide">
-              MoneyControl
-            </h2>
+            <h2 className="text-sm font-semibold tracking-wide">FlowTrack</h2>
             <p className="text-[11px] text-slate-400">
               See it. Measure it. Control it.
             </p>
           </div>
 
           <div className="flex-1 px-3 py-3 flex flex-col gap-3 text-xs overflow-y-auto">
+            {/* CATEGORIES LIST */}
             <div>
               <div className="text-slate-400 uppercase text-[10px] px-1 mb-1">
                 Categories
@@ -540,9 +864,7 @@ export default function DashboardPage() {
                         }`}
                         onClick={() => {
                           setSelectedCategory(cat.name);
-                          setExpandedCategory(
-                            isExpanded ? null : cat.name
-                          );
+                          setExpandedCategory(isExpanded ? null : cat.name);
                         }}
                       >
                         <div className="flex flex-col min-w-0">
@@ -593,17 +915,12 @@ export default function DashboardPage() {
 
                       {isExpanded && (
                         <form
-                          onSubmit={(e) =>
-                            handleAddCategoryEntry(e, cat.name)
-                          }
+                          onSubmit={(e) => handleAddCategoryEntry(e, cat.name)}
                           className="px-3 pb-3 pt-2 border-t border-slate-800 space-y-2 text-[11px]"
                         >
                           <div className="text-[10px] text-slate-400 mb-1">
                             Add{" "}
-                            {cat.type === "income"
-                              ? "income"
-                              : "expense"}{" "}
-                            entry
+                            {cat.type === "income" ? "income" : "expense"} entry
                           </div>
 
                           <div>
@@ -613,9 +930,7 @@ export default function DashboardPage() {
                               min="0"
                               step="0.01"
                               value={formAmount}
-                              onChange={(e) =>
-                                setFormAmount(e.target.value)
-                              }
+                              onChange={(e) => setFormAmount(e.target.value)}
                               className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
                               placeholder="0.00"
                             />
@@ -625,17 +940,15 @@ export default function DashboardPage() {
                             <label className="block mb-1">
                               Date{" "}
                               <span className="text-[10px] text-slate-400">
-                                (last 30 days)
+                                (last {windowDays} days)
                               </span>
                             </label>
                             <input
                               type="date"
-                              min={thirtyDaysAgoStr}
+                              min={windowStartStr}
                               max={todayStr}
                               value={formDate}
-                              onChange={(e) =>
-                                setFormDate(e.target.value)
-                              }
+                              onChange={(e) => setFormDate(e.target.value)}
                               className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
                             />
                           </div>
@@ -660,9 +973,7 @@ export default function DashboardPage() {
                             disabled={saving}
                             className="w-full rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed py-1.5 text-[11px] font-medium mt-1"
                           >
-                            {saving
-                              ? "Saving..."
-                              : `Add to "${cat.name}"`}
+                            {saving ? "Saving..." : `Add to "${cat.name}"`}
                           </button>
                         </form>
                       )}
@@ -672,10 +983,12 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <form onSubmit={handleAddCategory} className="space-y-1 text-[11px]">
-              <label className="block text-slate-400 px-1">
-                Add category
-              </label>
+            {/* ADD CATEGORY FORM */}
+            <form
+              onSubmit={handleAddCategory}
+              className="space-y-1 text-[11px]"
+            >
+              <label className="block text-slate-400 px-1">Add category</label>
               <div className="flex flex-wrap gap-1">
                 <input
                   type="text"
@@ -688,9 +1001,7 @@ export default function DashboardPage() {
                   className="w-[90px] rounded-lg bg-slate-950 border border-slate-700 px-2 py-1"
                   value={newCategoryType}
                   onChange={(e) =>
-                    setNewCategoryType(
-                      e.target.value as TransactionType
-                    )
+                    setNewCategoryType(e.target.value as TransactionType)
                   }
                 >
                   <option value="expense">Expense</option>
@@ -708,6 +1019,7 @@ export default function DashboardPage() {
               </p>
             </form>
 
+            {/* LEFT SIDEBAR FOOTER */}
             <div className="mt-auto pt-3 border-t border-slate-800">
               <button
                 type="button"
@@ -718,32 +1030,82 @@ export default function DashboardPage() {
             </div>
           </div>
 
+          {/* LEFT SIDEBAR PLAN LABEL */}
           <div className="px-3 py-3 border-t border-slate-800 text-[11px] text-slate-400">
-            <p>Free plan: last 30 days only.</p>
+            <p>
+              Plan:{" "}
+              <span className={isPro ? "text-amber-300 font-semibold" : ""}>
+                {isPro ? "Pro" : "Free"}
+              </span>
+            </p>
             <p className="mt-1 text-emerald-400">
-              Pro: unlock 90 days & reports.
+              {isPro
+                ? "Pro: tracking the last 90 days. Reports coming soon."
+                : "Free: tracking the last 30 days. Upgrade to Pro for 90 days & reports."}
             </p>
           </div>
         </aside>
 
-        {/* CENTER AREA */}
+        {/* ========================= */}
+        {/* CENTER AREA               */}
+        {/* ========================= */}
         <section className="flex-1 flex flex-col">
-          {/* Header */}
-          <header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-950/80">
+          {/* TOP HORIZONTAL BAR / HEADER */}
+          <header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-950/80 mb-3">
+            {/* Left side */}
             <div className="flex items-center gap-2 text-xs text-slate-400">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
               <span>Live money session</span>
             </div>
 
+            {/* Right side: Plan badge + Time + Dark mode + User + Logout */}
             <div className="flex items-center gap-3 text-xs text-slate-200">
-              <button className="px-2 py-1 rounded-md border border-slate-700 bg-slate-900 text-[11px]">
-                Dark / Light (soon)
+              {/* Plan badge */}
+              <span
+                className={
+                  isPro
+                    ? "px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500 text-[11px] uppercase tracking-wide text-emerald-300"
+                    : "px-2 py-1 rounded-full bg-slate-800 border border-slate-600 text-[11px] uppercase tracking-wide text-slate-300"
+                }
+              >
+                {isPro ? "PRO" : "FREE"}
+              </span>
+
+              {/* Time selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400">Time:</span>
+                <select
+                  className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs"
+                  value={windowDays}
+                  onChange={(e) => setWindowDays(Number(e.target.value))}
+                >
+                  {DAY_OPTIONS.map((days) => (
+                    <option key={days} value={days}>
+                      Last {days} days
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Dark Mode (placeholder) */}
+              <button
+                className="px-3 py-1 rounded-full border border-slate-600 text-xs text-slate-300 cursor-not-allowed opacity-60"
+                disabled
+              >
+                Dark mode
               </button>
+
+              {/* Logged in user */}
               {userEmail && (
                 <span className="px-2 py-1 rounded-full bg-slate-900 border border-slate-700">
-                  {userEmail}
+                  Welcome,&nbsp;
+                  <span className="font-semibold text-slate-50">
+                    {userEmail}
+                  </span>
                 </span>
               )}
+
+              {/* Logout */}
               <button
                 onClick={handleLogout}
                 className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-500 text-[11px] font-medium"
@@ -754,15 +1116,18 @@ export default function DashboardPage() {
           </header>
 
           {/* QUICK ADD BAR */}
-          <div className="border-b border-slate-900 bg-slate-950/80 px-4 py-2 text-[11px]">
+          <div className="border-b border-slate-900 bg-slate-950/90 px-4 py-3 text-[11px]">
             <form
               onSubmit={handleQuickAdd}
-              className="flex flex-wrap items-center gap-2"
+              className="flex flex-wrap items-center gap-2 md:gap-3"
             >
-              <span className="text-slate-400 mr-2">Quick add:</span>
+              <span className="text-slate-400 mr-1 whitespace-nowrap">
+                Quick add:
+              </span>
 
+              {/* Category */}
               <select
-                className="rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+                className="rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs min-w-[160px] focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
                 value={quickCategory}
                 onChange={(e) => setQuickCategory(e.target.value)}
               >
@@ -773,51 +1138,59 @@ export default function DashboardPage() {
                 ))}
               </select>
 
+              {/* Amount */}
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={quickAmount}
                 onChange={(e) => setQuickAmount(e.target.value)}
-                className="w-24 rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+                className="w-24 rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
                 placeholder="Amount"
               />
 
+              {/* Date */}
               <input
                 type="date"
-                min={thirtyDaysAgoStr}
+                min={windowStartStr}
                 max={todayStr}
                 value={quickDate}
                 onChange={(e) => setQuickDate(e.target.value)}
-                className="rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+                className="rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
               />
 
+              {/* Note */}
               <input
                 type="text"
                 value={quickDescription}
                 onChange={(e) => setQuickDescription(e.target.value)}
-                className="flex-1 min-w-[120px] rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+                className="flex-1 min-w-[140px] rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
                 placeholder="Optional note"
               />
 
+              {/* Button */}
               <button
                 type="submit"
                 disabled={quickSaving}
-                className="rounded-md bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 px-3 py-1 text-[11px] font-medium"
+                className="rounded-md bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 px-4 py-1.5 text-[11px] font-semibold tracking-wide transition-colors"
               >
                 {quickSaving ? "Adding..." : "Add"}
               </button>
             </form>
           </div>
 
-          {/* MAIN GRID */}
-          <div className="flex-1 grid grid-rows-[minmax(0,0.25fr),minmax(0,0.75fr)] gap-4 p-4">
-            {/* SUMMARY */}
+
+
+          {/* ========================= */}
+          {/* MAIN GRID (SUMMARY + LISTS) */}
+          {/* ========================= */}
+          <div className="flex-1 grid grid-rows-[minmax(0,0.18fr),minmax(0,0.82fr)] gap-4 p-4">
+            {/* SUMMARY: INCOME / EXPENSES / NET */}
             <div className="grid md:grid-cols-3 gap-4">
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
                   <h2 className="text-xs font-medium mb-1 text-slate-300">
-                    Income (last 30 days)
+                    Income {windowDays}
                   </h2>
                   <p className="text-xl font-semibold">
                     {formatCurrency(income)}
@@ -828,7 +1201,7 @@ export default function DashboardPage() {
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
                   <h2 className="text-xs font-medium mb-1 text-slate-300">
-                    Expenses (last 30 days)
+                    Expenses {windowDays}
                   </h2>
                   <p className="text-xl font-semibold">
                     {formatCurrency(expenses)}
@@ -839,7 +1212,7 @@ export default function DashboardPage() {
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
                   <h2 className="text-xs font-medium mb-1 text-slate-300">
-                    Net (last 30 days)
+                    Net {windowDays}
                   </h2>
                   <p className="text-xl font-semibold">
                     {formatCurrency(net)}
@@ -864,9 +1237,10 @@ export default function DashboardPage() {
 
             {/* BOTTOM: CATEGORY ENTRIES + ALL TRANSACTIONS */}
             <div className="grid md:grid-cols-2 gap-4 min-h-0">
-              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0">
+              {/* CATEGORY ENTRIES CARD */}
+              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-[calc(82vh-6rem)]">
                 <h2 className="text-sm font-medium mb-2">
-                  Category entries (last 30 days)
+                  Category Entries {windowDays}
                 </h2>
 
                 {errorMessage && (
@@ -886,16 +1260,31 @@ export default function DashboardPage() {
                     <span className="font-semibold text-slate-200">
                       {selectedCategory}
                     </span>{" "}
-                    for the last 30 days yet.
+                    for the last {windowDays} days yet.
                   </p>
                 ) : (
                   <>
-                    <p className="text-[11px] text-slate-400 mb-2">
+                    <p className="text-[11px] text-slate-400">
                       Entries for{" "}
                       <span className="font-semibold text-slate-200">
                         {selectedCategory}
                       </span>
                       :
+                    </p>
+
+                    {/* CATEGORY TOTAL LINE */}
+                    <p className="text-[11px] mt-1 mb-3">
+                      Total:{" "}
+                      <span
+                        className={
+                          categoryTotal < 0
+                            ? "text-red-300 font-semibold"
+                            : "text-emerald-300 font-semibold"
+                        }
+                      >
+                        {categoryTotal < 0 ? "-$" : "$"}
+                        {Math.abs(categoryTotal).toFixed(2)}
+                      </span>
                     </p>
 
                     {editingId && (
@@ -914,9 +1303,9 @@ export default function DashboardPage() {
                               type="number"
                               min="0"
                               step="0.01"
-                              value={editAmount}
+                              value={editingAmount}
                               onChange={(e) =>
-                                setEditAmount(e.target.value)
+                                setEditingAmount(e.target.value)
                               }
                               className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
                             />
@@ -925,16 +1314,16 @@ export default function DashboardPage() {
                             <label className="block mb-1">
                               Date{" "}
                               <span className="text-[10px] text-slate-400">
-                                (last 30 days)
+                                (last {windowDays} days)
                               </span>
                             </label>
                             <input
                               type="date"
-                              min={thirtyDaysAgoStr}
+                              min={windowStartStr}
                               max={todayStr}
-                              value={editDate}
+                              value={editingDate}
                               onChange={(e) =>
-                                setEditDate(e.target.value)
+                                setEditingDate(e.target.value)
                               }
                               className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
                             />
@@ -947,9 +1336,9 @@ export default function DashboardPage() {
                           </label>
                           <input
                             type="text"
-                            value={editDescription}
+                            value={editingDescription}
                             onChange={(e) =>
-                              setEditDescription(e.target.value)
+                              setEditingDescription(e.target.value)
                             }
                             className="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5"
                           />
@@ -974,11 +1363,116 @@ export default function DashboardPage() {
                       </form>
                     )}
 
-                    <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1">
+                      {editingId && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+                          <div className="w-full max-w-md rounded-xl bg-slate-900 border border-slate-700 p-5 shadow-2xl space-y-4">
+                            
+                            {/* Header */}
+                            <div className="flex items-center justify-between">
+                              <h2 className="text-sm font-semibold text-slate-100">Edit Transaction</h2>
+                              <button
+                                type="button"
+                                onClick={cancelEdit}
+                                className="text-slate-400 hover:text-slate-100 text-xs"
+                              >✕</button>
+                            </div>
+
+                            {/* Edit FORM */}
+                            <form onSubmit={handleSaveEdit} className="space-y-3 text-xs">
+                              
+                              {/* AMOUNT */}
+                              <div className="flex flex-col gap-1">
+                                <label className="text-slate-300">Amount</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={editingAmount}
+                                  onChange={(e) => setEditingAmount(e.target.value)}
+                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1 
+                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+
+                              {/* CATEGORY */}
+                              <div className="flex flex-col gap-1">
+                                <label className="text-slate-300">Category</label>
+                                <select
+                                  value={editingCategory}
+                                  onChange={(e) => setEditingCategory(e.target.value)}
+                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
+                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                >
+                                  {categories.map((cat) => (
+                                    <option key={cat.name} value={cat.name}>{cat.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              {/* DATE */}
+                              <div className="flex flex-col gap-1">
+                                <label className="text-slate-300">Date</label>
+                                <input
+                                  type="date"
+                                  value={editingDate}
+                                  onChange={(e) => setEditingDate(e.target.value)}
+                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
+                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+
+                              {/* NOTE */}
+                              <div className="flex flex-col gap-1">
+                                <label className="text-slate-300">Description</label>
+                                <input
+                                  type="text"
+                                  value={editingDescription}
+                                  onChange={(e) => setEditingDescription(e.target.value)}
+                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
+                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                  placeholder="Optional note"
+                                />
+                              </div>
+
+                              {/* BUTTONS */}
+                              <div className="flex justify-end gap-2 pt-2">
+                                <button
+                                  type="button"
+                                  onClick={cancelEdit}
+                                  className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-200 text-[11px]"
+                                >Cancel</button>
+
+                                <button
+                                  type="submit"
+                                  disabled={editingSaving}
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400
+                                            disabled:opacity-60 text-[11px] font-medium"
+                                >
+                                  {editingSaving ? "Saving..." : "Save Changes"}
+                                </button>
+                              </div>
+
+                            </form>
+                          </div>
+                        </div>
+                      )}
+
+
+                    <ul
+                      ref={categoryListRef}
+                      className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll"
+                    >
                       {categoryTransactions.map((t) => (
                         <li
                           key={t.id}
-                          className="flex items-center justify-between border-b border-slate-800/80 pb-1"
+                          className={`
+                            flex items-center justify-between rounded-md px-2 py-1.5
+                            border border-transparent
+                            ${t.id === highlightedTxId
+                              ? "bg-emerald-900/40 border-emerald-500/60"
+                              : "hover:bg-slate-800/60 border-slate-800/80"}
+                            transition-colors
+                          `}
                         >
                           <div>
                             <div className="font-medium">
@@ -986,26 +1480,23 @@ export default function DashboardPage() {
                               {formatCurrency(Number(t.amount))}
                             </div>
                             <div className="text-[11px] text-slate-400">
-                              {t.date}
-                              {t.description
-                                ? ` • ${t.description}`
-                                : ""}
+                              {formatDate(t.date)}
+                              {t.description ? ` • ${t.description}` : ""}
                             </div>
                           </div>
+
                           <div className="flex items-center gap-1 ml-2">
                             <button
                               type="button"
                               onClick={() => startEdit(t)}
-                              className="px-2 py-1 rounded-md border border-slate-600 text-[10px] text-slate-200 hover:bg-slate-800"
+                              className="px-2 py-1 rounded-md border border-slate-600 text-[10px] text-slate-200 hover:bg-slate-800 transition-colors"
                             >
                               Edit
                             </button>
                             <button
                               type="button"
-                              onClick={() =>
-                                handleDeleteTransaction(t.id)
-                              }
-                              className="px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20"
+                              onClick={() => handleDeleteTransaction(t.id)}
+                              className="px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20 transition-colors"
                             >
                               Delete
                             </button>
@@ -1017,61 +1508,72 @@ export default function DashboardPage() {
                 )}
               </div>
 
-              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0">
+              {/* ALL TRANSACTIONS CARD */}
+              <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-[calc(82vh-6rem)]">
                 <h2 className="text-sm font-medium mb-3">
-                  All transactions (last 30 days)
+                  All transactions {windowDays}
                 </h2>
 
                 {transactions.length === 0 ? (
                   <p className="text-xs text-slate-300">
-                    No transactions yet in the last 30 days.
+                    No transactions yet in the last {windowDays} days.
                   </p>
                 ) : (
-                  <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1">
-                    {transactions.map((t) => (
-                      <li
-                        key={t.id}
-                        className="flex items-center justify-between border-b border-slate-800/80 pb-1"
-                      >
-                        <div>
-                          <div className="font-medium">
-                            {t.type === "income" ? "+" : "-"}
-                            {formatCurrency(Number(t.amount))}
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {t.category} • {t.date}
-                            {t.description
-                              ? ` • ${t.description}`
-                              : ""}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteTransaction(t.id)}
-                          className="ml-2 px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20"
-                        >
-                          Delete
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                 <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
+                {transactions.map((t) => (
+                  <li
+                    key={t.id}
+                    className={`
+                      flex items-center justify-between rounded-md px-2 py-1.5
+                      border border-transparent
+                      ${t.id === highlightedTxId
+                        ? "bg-emerald-900/40 border-emerald-500/60"
+                        : "hover:bg-slate-800/60 border-slate-800/80"}
+                      transition-colors
+                    `}
+                  >
+                    <div>
+                      <div className="font-medium">
+                        {t.type === "income" ? "+" : "-"}
+                        {formatCurrency(Number(t.amount))}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {t.category} • {formatDate(t.date)}
+                        {t.description ? ` • ${t.description}` : ""}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteTransaction(t.id)}
+                      className="ml-2 px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20 transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </li>
+                ))}
+              </ul>
+
+
                 )}
               </div>
             </div>
           </div>
         </section>
 
-        {/* RIGHT SIDEBAR – PRELIM REPORT + BUDGETS + PIE */}
+        {/* ========================= */}
+        {/* RIGHT SIDEBAR             */}
+        {/* ========================= */}
         <aside className="w-72 border-l border-slate-800 bg-slate-950/80 flex flex-col">
           <div className="px-4 py-4 border-b border-slate-800">
             <h2 className="text-sm font-semibold">Preliminary report</h2>
             <p className="text-[11px] text-slate-400">
-              Snapshot of your last 30 days.
+              Snapshot of your {windowDays}.
             </p>
           </div>
 
           <div className="flex-1 px-4 py-4 space-y-4 text-[11px] text-slate-300 overflow-auto">
-            {/* Status card */}
+            {/* OVERALL STATUS CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-3">
               <h3 className="font-medium mb-1 text-xs">Overall status</h3>
               <p>
@@ -1090,7 +1592,7 @@ export default function DashboardPage() {
                 .
               </p>
               <p className="mt-1 text-slate-400">
-                Based on your net result over the last 30 days:
+                Based on your net result over the {windowDays}:
               </p>
               <ul className="list-disc list-inside mt-1 space-y-1 text-slate-400">
                 <li>Income: {formatCurrency(income)}</li>
@@ -1110,7 +1612,7 @@ export default function DashboardPage() {
               </ul>
             </div>
 
-            {/* Savings rate */}
+            {/* SAVINGS RATE CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-3">
               <h3 className="font-medium mb-1 text-xs">Savings rate</h3>
               {savingsRate === null ? (
@@ -1123,10 +1625,12 @@ export default function DashboardPage() {
                   <p className="text-lg font-semibold mb-1">
                     {savingsRate}%
                   </p>
+
                   <p className="text-slate-400">
                     This is how much of your income you&apos;re keeping after
-                    expenses in the last 30 days.
+                    expenses in the last {windowDays} days.
                   </p>
+
                   <p className="mt-1 text-slate-400">
                     A simple reference for many young professionals is{" "}
                     <span className="text-emerald-300 font-medium">
@@ -1138,7 +1642,7 @@ export default function DashboardPage() {
               )}
             </div>
 
-            {/* Top expense categories */}
+            {/* TOP EXPENSE CATEGORIES CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-3">
               <h3 className="font-medium mb-1 text-xs">
                 Where your money actually goes
@@ -1152,7 +1656,7 @@ export default function DashboardPage() {
               ) : (
                 <>
                   <p className="text-slate-400 mb-2">
-                    Biggest expense categories in the last 30 days:
+                    Biggest expense categories in the last {windowDays} days:
                   </p>
                   <ul className="space-y-1">
                     {topCategories.map(([catName, amount]) => (
@@ -1175,15 +1679,16 @@ export default function DashboardPage() {
               )}
             </div>
 
-            {/* Budgets */}
+            {/* BUDGET CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-3">
-              <h3 className="font-medium mb-1 text-xs">Budgets (per month)</h3>
+              <h3 className="font-medium mb-1 text-xs">Budgets (Monthly)</h3>
               <p className="text-slate-400 mb-2">
                 Set a simple limit for your key categories. We&apos;ll show how
                 much you&apos;ve used so far.
               </p>
 
-              <div className="space-y-2 pr-1">
+              {/* Limited height so this area doesn't grow forever */}
+              <div className="space-y-2 pr-1 max-h-56 overflow-y-auto budget-scroll">
                 {categories.map((cat) => {
                   const budget = categoryBudgets[cat.name] ?? 0;
                   const spent = expenseByCategory[cat.name] ?? 0;
@@ -1248,21 +1753,54 @@ export default function DashboardPage() {
               </p>
             </div>
 
-            {/* Coming soon */}
+            {/* PRO PLAN STATUS CARD */}
             <div className="bg-slate-900 rounded-lg border border-emerald-600/60 p-3">
               <h3 className="font-medium mb-1 text-xs text-emerald-300">
-                Coming soon: 90-day Pro view
+                {isPro ? "Pro plan active" : "Free plan"}
               </h3>
-              <p>
-                Upgrade will unlock a 90-day report, trends over time, and
-                deeper breakdown by category type (fixed vs variable).
-              </p>
+
+              {isPro ? (
+                <>
+                  <p className="text-slate-300">
+                    You&apos;re currently using the{" "}
+                    <span className="font-semibold text-amber-300">Pro</span>{" "}
+                    plan.
+                  </p>
+                  <p className="mt-1 text-slate-400">
+                    Tracking the last{" "}
+                    <span className="font-semibold text-emerald-300">
+                      {windowDays} days
+                    </span>{" "}
+                    of activity with advanced dashboards.
+                  </p>
+                  <p className="mt-1 text-slate-500">
+                    More Pro features like reports and trends will appear here
+                    as we build them.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-slate-300">
+                    You&apos;re currently on the{" "}
+                    <span className="font-semibold">Free</span> plan.
+                  </p>
+                  <p className="mt-1 text-slate-400">
+                    Free tracks the last{" "}
+                    <span className="font-semibold">{windowDays} days</span>{" "}
+                    only.
+                  </p>
+                  <p className="mt-1 text-slate-500">
+                    Upgrade to Pro to unlock a longer history window and richer
+                    insights here.
+                  </p>
+                </>
+              )}
             </div>
 
-            {/* PIE CHART */}
+            {/* PIE CHART CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-4 flex flex-col items-center mt-2">
               <div className="text-[11px] text-slate-400 mb-2">
-                Spending vs income (last 30 days)
+                Spending vs income {windowDays}
               </div>
 
               <div className="relative flex items-center justify-center mb-3">
@@ -1294,9 +1832,7 @@ export default function DashboardPage() {
                 <div className="absolute text-center">
                   <div className="text-xs font-semibold">
                     {income > 0
-                      ? `${Math.round(
-                          Math.min(spendingRatio, 1) * 100
-                        )}%`
+                      ? `${Math.round(Math.min(spendingRatio, 1) * 100)}%`
                       : "--"}
                   </div>
                   <div className="text-[10px] text-slate-400">
