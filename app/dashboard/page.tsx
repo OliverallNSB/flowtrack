@@ -65,10 +65,9 @@ function displayDate(v: string) {
   return v; // otherwise print as-is
 }
 
-
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
-  const mm = String(d.getMonth() + 1).padStart(2, "0"); // month is 0-based
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   const yyyy = d.getFullYear();
   return `${mm}/${dd}/${yyyy}`;
@@ -93,9 +92,8 @@ export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
 
-  // ...your other state...
-  const categoryListRef = useRef<HTMLUListElement | null>(null); // 👈 add this
-  const [profile, setProfile] = useState<any>(null); // using any to avoid type import issues
+  const categoryListRef = useRef<HTMLUListElement | null>(null);
+  const [profile, setProfile] = useState<any>(null);
   const isPro = profile?.plan?.trim().toLowerCase() === "pro";
 
   // ---- TIME WINDOW (FREE vs PRO) ----
@@ -110,19 +108,18 @@ export default function DashboardPage() {
   // ---- USER & DATA STATE ----
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
-  const [selectedCategoryName, setSelectedCategoryName] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [highlightedTxId, setHighlightedTxId] = useState<string | null>(null);
-  
+
   // ---- CATEGORY STATE (LEFT BAR) ----
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoriesLoaded, setCategoriesLoaded] = useState(false);
-
   const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryType, setNewCategoryType] = useState<TransactionType>("expense");
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [newCategoryType, setNewCategoryType] =
+    useState<TransactionType>("expense");
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
   // ---- INLINE ENTRY FORM (LEFT BAR) ----
@@ -134,10 +131,10 @@ export default function DashboardPage() {
   // ---- EDIT TRANSACTION (CENTER) ----
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingAmount, setEditingAmount] = useState<string>("");
-
-  const [editingCategory, setEditingCategory] = useState<string>(""); 
+  const [editingCategory, setEditingCategory] = useState<string>("");
   const [editingDate, setEditingDate] = useState("");
-  const [editingDescription, setEditingDescription] = useState<string>("");
+  const [editingDescription, setEditingDescription] =
+    useState<string>("");
   const [editingSaving, setEditingSaving] = useState(false);
 
   // ---- QUICK ADD BAR (CENTER TOP) ----
@@ -146,13 +143,12 @@ export default function DashboardPage() {
   const [quickDate, setQuickDate] = useState("");
   const [quickDescription, setQuickDescription] = useState("");
   const [quickSaving, setQuickSaving] = useState(false);
-  
-  // ---- SIMPLE BUDGETS (RIGHT SIDEBAR, LOCAL ONLY FOR NOW) ----
-  const [categoryBudgets, setCategoryBudgets] = useState<Record<string, number>>(
-    {}
-  );
 
-  // Load budgets from localStorage
+  // ---- SIMPLE BUDGETS (RIGHT SIDEBAR, LOCAL ONLY FOR NOW) ----
+  const [categoryBudgets, setCategoryBudgets] =
+    useState<Record<string, number>>(DEFAULT_CATEGORY_BUDGETS);
+
+  // ---- LOAD BUDGETS FROM LOCALSTORAGE ----
   useEffect(() => {
     try {
       const saved = localStorage.getItem("ft-budgets");
@@ -167,7 +163,7 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // Save budgets to localStorage whenever they change
+  // ---- SAVE BUDGETS ----
   useEffect(() => {
     try {
       localStorage.setItem("ft-budgets", JSON.stringify(categoryBudgets));
@@ -176,7 +172,7 @@ export default function DashboardPage() {
     }
   }, [categoryBudgets]);
 
-  // ---- LOAD / SAVE CATEGORIES & BUDGETS (LEFT BAR ORDER + BUDGETS) ----
+  // ---- LOAD CATEGORIES & BUDGETS (ORDER + BUDGETS) ----
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -191,10 +187,9 @@ export default function DashboardPage() {
 
       const storedBudgets = window.localStorage.getItem(BUDGETS_STORAGE_KEY);
       if (storedBudgets) {
-        const parsedBudgets = JSON.parse(storedBudgets) as Record<
-          string,
-          number
-        >;
+        const parsedBudgets = JSON.parse(
+          storedBudgets
+        ) as Record<string, number>;
         if (parsedBudgets && typeof parsedBudgets === "object") {
           setCategoryBudgets((prev) => ({
             ...prev,
@@ -207,13 +202,14 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // ---- SCROLL CATEGORY LIST TO TOP WHEN CATEGORY CHANGES ----
   useEffect(() => {
     if (categoryListRef.current) {
       categoryListRef.current.scrollTo({ top: 0, behavior: "smooth" });
     }
-  }, [selectedCategoryName]); // <- use your actual selected category state here
+  }, [selectedCategory]);
 
-
+  // ---- SAVE CATEGORIES TO LOCALSTORAGE ----
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -226,6 +222,7 @@ export default function DashboardPage() {
     }
   }, [categories]);
 
+  // ---- SAVE BUDGETS TO LOCALSTORAGE (KEYED VERSION) ----
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -241,7 +238,6 @@ export default function DashboardPage() {
   // ---- LOAD CATEGORY ORDER FROM SUPABASE ----
   useEffect(() => {
     if (!userId) return;
-    
 
     async function loadCategoryOrder() {
       console.log("Loading category order for user:", userId);
@@ -254,7 +250,6 @@ export default function DashboardPage() {
 
       if (error) {
         console.warn("Could not load category order:", error.message);
-        // Fall back to defaults
         setCategories(DEFAULT_CATEGORIES);
         setCategoriesLoaded(true);
         return;
@@ -278,6 +273,40 @@ export default function DashboardPage() {
     }
 
     loadCategoryOrder();
+  }, [userId]);
+
+  // ---- LOAD PROFILE / PLAN INFO ----
+  useEffect(() => {
+    if (!userId) return;
+
+    let cancelled = false;
+
+    async function loadProfile() {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("plan")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Error loading profile:", error);
+        return;
+      }
+
+      if (!data || cancelled) {
+        console.log("No profile row found for user yet:", userId);
+        return;
+      }
+
+      console.log("Loaded profile:", data);
+      setProfile(data);
+    }
+
+    loadProfile();
+
+    return () => {
+      cancelled = true;
+    };
   }, [userId]);
 
   // ---- SAVE CATEGORY ORDER TO SUPABASE ----
@@ -313,44 +342,42 @@ export default function DashboardPage() {
   }, [categories, userId, categoriesLoaded]);
 
   // ---- LOAD TRANSACTIONS FROM SUPABASE ----
-// at top of component you already have:
-// const { user, loading: authLoading } = useAuth();
-// const [profile, setProfile] = useState<any>(null);
-// const isPro = profile?.plan?.trim().toLowerCase() === "pro";
+  useEffect(() => {
+    async function load() {
+      if (!userId) return;
 
-useEffect(() => {
-  if (authLoading) return;
-  if (!user) return;
+      setLoading(true);
+      setErrorMessage(null);
 
-  let cancelled = false;
+      const today = new Date();
+      const windowStart = new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate() - (windowDays - 1)
+      );
+      const windowStartStr = windowStart.toISOString().slice(0, 10);
 
-  async function loadProfile() {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("plan")
-      .eq("id", user?.id)      // matches the 'id' column in your profiles table
-      .maybeSingle();
+      const { data, error } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("user_id", userId)
+        .gte("date", windowStartStr)
+        .order("date", { ascending: false });
 
-    if (error) {
-      console.error("Error loading profile:", error);
-      return;
+      if (error) {
+        console.error("Error loading transactions:", error);
+        setErrorMessage(error.message);
+        setTransactions([]);
+        setLoading(false);
+        return;
+      }
+
+      setTransactions((data ?? []) as Transaction[]);
+      setLoading(false);
     }
 
-    if (!data || cancelled) {
-      console.log("No profile row found for user yet:", user?.id);
-      return;
-    }
-
-    console.log("Loaded profile:", data);
-    setProfile(data);
-  }
-
-  loadProfile();
-
-  return () => {
-    cancelled = true;
-  };
-}, [authLoading, user]);
+    load();
+  }, [userId, windowDays]);
 
   // ---- LOGOUT ----
   async function handleLogout() {
@@ -441,124 +468,115 @@ useEffect(() => {
     setExpandedCategory(null);
   }
 
+  // ---- QUICK ADD ----
   async function handleQuickAdd(e: FormEvent) {
-  e.preventDefault();
-  setErrorMessage(null);
+    e.preventDefault();
+    setErrorMessage(null);
 
-  if (!userId) {
-    setErrorMessage("You must be logged in to add entries.");
-    return;
-  }
-
-  if (!quickCategory) {
-    setErrorMessage("Please choose a category.");
-    return;
-  }
-
-  // 🔍 Find the matching category object
-  const cat = categories.find((c) => c.name === quickCategory);
-  
-  if (!cat) {
-  console.warn("Quick Add: category not found", {
-    quickCategory,
-    categories: categories.map((c) => c.name),
-  });
-
-  // Try to auto-fix by resetting Quick Add to a valid category
-  if (categories.length > 0) {
-    setQuickCategory(categories[0].name);
-  }
-
-  setErrorMessage("Category not found for Quick Add. Please pick a category again.");
-  return;
-}
-
-
-  const catName = cat.name;
-  const type: TransactionType = cat.type;
-
-  if (!quickAmount || !quickDate) {
-    setErrorMessage("Please fill amount and date.");
-    return;
-  }
-
-  const amountNumber = Number(quickAmount);
-  if (Number.isNaN(amountNumber) || amountNumber <= 0) {
-    setErrorMessage("Amount must be a positive number.");
-    return;
-  }
-
-  const chosen = new Date(quickDate);
-  if (chosen < windowStart || chosen > today) {
-    setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
-    return;
-  }
-
-  setQuickSaving(true);
-
-  console.log("Quick Add submit", {
-    quickCategory,
-    catName,
-    type,
-    amountNumber,
-    quickDate,
-    quickDescription,
-  });
-
-  try {
-    // ⬇ INSERT and get the inserted row back
-    const { data: insertedRows, error: insertError } = await supabase
-      .from("transactions")
-      .insert({
-        user_id: userId,
-        type,
-        amount: amountNumber,
-        date: quickDate,
-        category: catName, // ✅ resolved category name
-        description: quickDescription || null,
-      })
-      .select(); // <-- important so we get the new id
-
-    if (insertError) {
-      console.error("Quick Add insert error:", insertError);
-      setErrorMessage(insertError.message);
+    if (!userId) {
+      setErrorMessage("You must be logged in to add entries.");
       return;
     }
 
-    let newId: string | null = null;
-    if (insertedRows && insertedRows.length > 0) {
-      newId = insertedRows[0].id as string;
+    if (!quickCategory) {
+      setErrorMessage("Please choose a category.");
+      return;
     }
 
-    // 🔁 Reload the window's transactions so category cards & totals update
-    const { data, error: txError } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("user_id", userId)
-      .gte("date", windowStartStr)
-      .order("date", { ascending: false });
+    const cat = categories.find((c) => c.name === quickCategory);
 
-    if (txError) {
-      console.error("Quick Add reload error:", txError);
-      setErrorMessage(txError.message);
-    } else {
-      setTransactions((data ?? []) as Transaction[]);
+    if (!cat) {
+      console.warn("Quick Add: category not found", {
+        quickCategory,
+        categories: categories.map((c) => c.name),
+      });
+
+      if (categories.length > 0) {
+        setQuickCategory(categories[0].name);
+      }
+
+      setErrorMessage(
+        "Category not found for Quick Add. Please pick a category again."
+      );
+      return;
     }
 
-    // ✨ Highlight the new transaction row (Option C)
-    if (newId) {
-      setHighlightedTxId(newId);
+    if (!quickAmount || !quickDate) {
+      setErrorMessage("Please fill amount and date.");
+      return;
     }
 
-    // 🔄 Reset inputs
-    setQuickAmount("");
-    setQuickDescription("");
-    setQuickDate(todayStr);
-    // ⚠️ do NOT reset quickCategory, so the user can add multiple in same category
-  } finally {
-    setQuickSaving(false);
+    const amountNumber = Number(quickAmount);
+    if (Number.isNaN(amountNumber) || amountNumber <= 0) {
+      setErrorMessage("Amount must be a positive number.");
+      return;
+    }
+
+    const chosen = new Date(quickDate);
+    if (chosen < windowStart || chosen > today) {
+      setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
+      return;
+    }
+
+    setQuickSaving(true);
+
+    console.log("Quick Add submit", {
+      quickCategory,
+      amountNumber,
+      quickDate,
+      quickDescription,
+    });
+
+    try {
+      const { data: insertedRows, error: insertError } = await supabase
+        .from("transactions")
+        .insert({
+          user_id: userId,
+          type: cat.type,
+          amount: amountNumber,
+          date: quickDate,
+          category: cat.name,
+          description: quickDescription || null,
+        })
+        .select();
+
+      if (insertError) {
+        console.error("Quick Add insert error:", insertError);
+        setErrorMessage(insertError.message);
+        return;
+      }
+
+      let newId: string | null = null;
+      if (insertedRows && insertedRows.length > 0) {
+        newId = insertedRows[0].id as string;
+      }
+
+      const { data, error: txError } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("user_id", userId)
+        .gte("date", windowStartStr)
+        .order("date", { ascending: false });
+
+      if (txError) {
+        console.error("Quick Add reload error:", txError);
+        setErrorMessage(txError.message);
+      } else {
+        setTransactions((data ?? []) as Transaction[]);
+      }
+
+      if (newId) {
+        setHighlightedTxId(newId);
+      }
+
+      setQuickAmount("");
+      setQuickDescription("");
+      setQuickDate(todayStr);
+      // keep quickCategory so user can add multiple entries in same category
+    } finally {
+      setQuickSaving(false);
+    }
   }
-}
 
   function startEdit(t: Transaction) {
     setEditingId(t.id);
@@ -701,65 +719,37 @@ useEffect(() => {
     if (!quickDate) setQuickDate(todayStr);
   }, [formDate, quickDate, todayStr]);
 
- useEffect(() => {
-  if (categories.length === 0) return;
-
-  // Does the current quickCategory still exist?
-  const exists = categories.some((c) => c.name === quickCategory);
-
-  // If nothing selected yet OR the selected one was renamed/deleted,
-  // reset Quick Add to the first category.
-  if (!quickCategory || !exists) {
-    setQuickCategory(categories[0].name);
-  }
-}, [categories, quickCategory]);
-
-
   useEffect(() => {
-  if (!highlightedTxId) return;
+    if (categories.length === 0) return;
 
-  const timer = setTimeout(() => {
-    setHighlightedTxId(null);
-  }, 2000);
+    const exists = categories.some((c) => c.name === quickCategory);
 
-  return () => clearTimeout(timer);
-}, [highlightedTxId]);
-
-useEffect(() => {
-  if (!userId) return;
-
-  let cancelled = false;
-
-  async function loadProfile() {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("plan")
-      .eq("id", userId)   // matches the 'id' column in your screenshot
-      .maybeSingle();
-
-    if (error) {
-      console.error("Error loading profile:", {
-        message: (error as any).message,
-        details: (error as any).details,
-        hint: (error as any).hint,
-        code: (error as any).code,
-      });
-      return;
+    if (!quickCategory || !exists) {
+      setQuickCategory(categories[0].name);
     }
+  }, [categories, quickCategory]);
 
-    if (!data || cancelled) return;
+  // ---- HIGHLIGHT TIMER ----
+  useEffect(() => {
+    if (!highlightedTxId) return;
 
-    setProfile(data);
-  }
+    const timer = setTimeout(() => {
+      setHighlightedTxId(null);
+    }, 2000);
 
-  loadProfile();
+    return () => clearTimeout(timer);
+  }, [highlightedTxId]);
 
-  return () => {
-    cancelled = true;
-  };
-}, [userId]);
+  // ---- SET USER ID AND EMAIL ----
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) return;
 
+    setUserEmail(user.email ?? null);
+    setUserId(user.id);
 
+    console.log("Authenticated as:", user.id);
+  }, [authLoading, user]);
 
   // ---- DERIVED VALUES ----
   const { income, expenses, net } = summarize(transactions);
@@ -1179,8 +1169,6 @@ useEffect(() => {
             </form>
           </div>
 
-
-
           {/* ========================= */}
           {/* MAIN GRID (SUMMARY + LISTS) */}
           {/* ========================= */}
@@ -1363,101 +1351,6 @@ useEffect(() => {
                       </form>
                     )}
 
-                      {editingId && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-                          <div className="w-full max-w-md rounded-xl bg-slate-900 border border-slate-700 p-5 shadow-2xl space-y-4">
-                            
-                            {/* Header */}
-                            <div className="flex items-center justify-between">
-                              <h2 className="text-sm font-semibold text-slate-100">Edit Transaction</h2>
-                              <button
-                                type="button"
-                                onClick={cancelEdit}
-                                className="text-slate-400 hover:text-slate-100 text-xs"
-                              >✕</button>
-                            </div>
-
-                            {/* Edit FORM */}
-                            <form onSubmit={handleSaveEdit} className="space-y-3 text-xs">
-                              
-                              {/* AMOUNT */}
-                              <div className="flex flex-col gap-1">
-                                <label className="text-slate-300">Amount</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  value={editingAmount}
-                                  onChange={(e) => setEditingAmount(e.target.value)}
-                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1 
-                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                />
-                              </div>
-
-                              {/* CATEGORY */}
-                              <div className="flex flex-col gap-1">
-                                <label className="text-slate-300">Category</label>
-                                <select
-                                  value={editingCategory}
-                                  onChange={(e) => setEditingCategory(e.target.value)}
-                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
-                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                >
-                                  {categories.map((cat) => (
-                                    <option key={cat.name} value={cat.name}>{cat.name}</option>
-                                  ))}
-                                </select>
-                              </div>
-
-                              {/* DATE */}
-                              <div className="flex flex-col gap-1">
-                                <label className="text-slate-300">Date</label>
-                                <input
-                                  type="date"
-                                  value={editingDate}
-                                  onChange={(e) => setEditingDate(e.target.value)}
-                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
-                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                />
-                              </div>
-
-                              {/* NOTE */}
-                              <div className="flex flex-col gap-1">
-                                <label className="text-slate-300">Description</label>
-                                <input
-                                  type="text"
-                                  value={editingDescription}
-                                  onChange={(e) => setEditingDescription(e.target.value)}
-                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
-                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                  placeholder="Optional note"
-                                />
-                              </div>
-
-                              {/* BUTTONS */}
-                              <div className="flex justify-end gap-2 pt-2">
-                                <button
-                                  type="button"
-                                  onClick={cancelEdit}
-                                  className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-200 text-[11px]"
-                                >Cancel</button>
-
-                                <button
-                                  type="submit"
-                                  disabled={editingSaving}
-                                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400
-                                            disabled:opacity-60 text-[11px] font-medium"
-                                >
-                                  {editingSaving ? "Saving..." : "Save Changes"}
-                                </button>
-                              </div>
-
-                            </form>
-                          </div>
-                        </div>
-                      )}
-
-
                     <ul
                       ref={categoryListRef}
                       className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll"
@@ -1465,14 +1358,11 @@ useEffect(() => {
                       {categoryTransactions.map((t) => (
                         <li
                           key={t.id}
-                          className={`
-                            flex items-center justify-between rounded-md px-2 py-1.5
-                            border border-transparent
-                            ${t.id === highlightedTxId
+                          className={`flex items-center justify-between rounded-md px-2 py-1.5 border border-transparent ${
+                            t.id === highlightedTxId
                               ? "bg-emerald-900/40 border-emerald-500/60"
-                              : "hover:bg-slate-800/60 border-slate-800/80"}
-                            transition-colors
-                          `}
+                              : "hover:bg-slate-800/60 border-slate-800/80"
+                          } transition-colors`}
                         >
                           <div>
                             <div className="font-medium">
@@ -1519,42 +1409,37 @@ useEffect(() => {
                     No transactions yet in the last {windowDays} days.
                   </p>
                 ) : (
-                 <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
-                {transactions.map((t) => (
-                  <li
-                    key={t.id}
-                    className={`
-                      flex items-center justify-between rounded-md px-2 py-1.5
-                      border border-transparent
-                      ${t.id === highlightedTxId
-                        ? "bg-emerald-900/40 border-emerald-500/60"
-                        : "hover:bg-slate-800/60 border-slate-800/80"}
-                      transition-colors
-                    `}
-                  >
-                    <div>
-                      <div className="font-medium">
-                        {t.type === "income" ? "+" : "-"}
-                        {formatCurrency(Number(t.amount))}
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        {t.category} • {formatDate(t.date)}
-                        {t.description ? ` • ${t.description}` : ""}
-                      </div>
-                    </div>
+                  <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
+                    {transactions.map((t) => (
+                      <li
+                        key={t.id}
+                        className={`flex items-center justify-between rounded-md px-2 py-1.5 border border-transparent ${
+                          t.id === highlightedTxId
+                            ? "bg-emerald-900/40 border-emerald-500/60"
+                            : "hover:bg-slate-800/60 border-slate-800/80"
+                        } transition-colors`}
+                      >
+                        <div>
+                          <div className="font-medium">
+                            {t.type === "income" ? "+" : "-"}
+                            {formatCurrency(Number(t.amount))}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            {t.category} • {formatDate(t.date)}
+                            {t.description ? ` • ${t.description}` : ""}
+                          </div>
+                        </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteTransaction(t.id)}
-                      className="ml-2 px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20 transition-colors"
-                    >
-                      Delete
-                    </button>
-                  </li>
-                ))}
-              </ul>
-
-
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTransaction(t.id)}
+                          className="ml-2 px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
             </div>
@@ -1687,7 +1572,6 @@ useEffect(() => {
                 much you&apos;ve used so far.
               </p>
 
-              {/* Limited height so this area doesn't grow forever */}
               <div className="space-y-2 pr-1 max-h-56 overflow-y-auto budget-scroll">
                 {categories.map((cat) => {
                   const budget = categoryBudgets[cat.name] ?? 0;
