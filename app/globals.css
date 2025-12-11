@@ -54,3 +54,36 @@ body {
   width: 0;
   height: 0;
 }
+/* Hide print-only stuff on screen */
+@media screen {
+  .only-print {
+    display: none;
+  }
+}
+
+
+
+/* Simple print styling – no hiding */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Make print cards/document look clean on paper */
+  .print-card {
+    background: #ffffff !important;
+    color: #000000 !important;
+    border: 1px solid #cccccc;
+    border-radius: 4px;
+    box-shadow: none !important;
+  }
+
+  .print-report {
+    background: #ffffff !important;
+  }
+}

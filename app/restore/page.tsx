@@ -961,7 +961,7 @@ useEffect(() => {
                 onClick={closePrintDialog}
                 className="text-slate-400 hover:text-slate-100 text-sm"
               >
-                ✕
+            
               </button>
             </div>
 
@@ -2036,13 +2036,12 @@ useEffect(() => {
         
           
         {/* ============= PRINT-ONLY REPORT ============= */}
-      <div className="only-print p-8 print-text-sm">
-        <h1 className="text-lg font-semibold mb-1">FlowTrack Snapshot</h1>
-        <p className="mb-4">
-          Period: {periodLabel} • Generated on {formatDate(periodStart)}
-        </p>
-
-        {/* SUMMARY CARD (PRINT STYLE) */}
+        <div className="print-report p-8 text-xs">
+          <h1 className="text-lg font-semibold mb-1">FlowTrack Snapshot</h1>
+            <p className="mb-4">
+               Period: {periodLabel} • Generated on {formatDate(periodStart)}
+            </p>
+          {/* SUMMARY CARD (PRINT STYLE) */}
           <section className="print-card p-3 mb-4">
             <h2 className="font-semibold mb-2">Summary</h2>
             <ul className="list-disc list-inside space-y-1">
@@ -2115,8 +2114,8 @@ useEffect(() => {
           </section>
 
 
-        {/* OPTIONAL: BUDGET STATUS (SHORT) */}
-        <section className="print-card p-3">
+          {/* OPTIONAL: BUDGET STATUS (SHORT) */}
+          <section className="print-card p-3">
           <h2 className="font-semibold mb-2">Budgets overview</h2>
           <p className="mb-2">
             Showing only categories that have a budget set.
@@ -2185,8 +2184,6 @@ useEffect(() => {
           </tbody>
         </table>
       </section>
-
-
 </div>
 
 {/* =========== END PRINT-ONLY REPORT =========== */}
