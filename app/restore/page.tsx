@@ -65,10 +65,9 @@ function displayDate(v: string) {
   return v; // otherwise print as-is
 }
 
-
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
-  const mm = String(d.getMonth() + 1).padStart(2, "0"); // month is 0-based
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   const yyyy = d.getFullYear();
   return `${mm}/${dd}/${yyyy}`;
@@ -89,40 +88,42 @@ function getSpendingRatio(income: number, expenses: number) {
   return Math.min(Math.max(ratio, 0), 2);
 }
 
+type ReportRangeMode = "thisMonth" | "lastNDays" | "current" | "custom" | "lastMonth";
+
+function handlePrintReport() {
+  // For now just print the whole page
+  window.print();
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
 
-  // ...your other state...
-  const categoryListRef = useRef<HTMLUListElement | null>(null); // 👈 add this
-  const [profile, setProfile] = useState<any>(null); // using any to avoid type import issues
+  const categoryListRef = useRef<HTMLUListElement | null>(null);
+  const [profile, setProfile] = useState<any>(null);
   const isPro = profile?.plan?.trim().toLowerCase() === "pro";
+
+
 
   // ---- TIME WINDOW (FREE vs PRO) ----
   const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90] : [7, 14, 30];
   const [windowDays, setWindowDays] = useState<number>(isPro ? 90 : 30);
 
-  const today = new Date();
-  const windowStart = new Date(today.getTime() - windowDays * 86400000);
-  const todayStr = today.toISOString().slice(0, 10);
-  const windowStartStr = windowStart.toISOString().slice(0, 10);
-
   // ---- USER & DATA STATE ----
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
-  const [selectedCategoryName, setSelectedCategoryName] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [highlightedTxId, setHighlightedTxId] = useState<string | null>(null);
-  
+
   // ---- CATEGORY STATE (LEFT BAR) ----
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoriesLoaded, setCategoriesLoaded] = useState(false);
-
   const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryType, setNewCategoryType] = useState<TransactionType>("expense");
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [newCategoryType, setNewCategoryType] =
+    useState<TransactionType>("expense");
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
   // ---- INLINE ENTRY FORM (LEFT BAR) ----
@@ -134,10 +135,10 @@ export default function DashboardPage() {
   // ---- EDIT TRANSACTION (CENTER) ----
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingAmount, setEditingAmount] = useState<string>("");
-
-  const [editingCategory, setEditingCategory] = useState<string>(""); 
+  const [editingCategory, setEditingCategory] = useState<string>("");
   const [editingDate, setEditingDate] = useState("");
-  const [editingDescription, setEditingDescription] = useState<string>("");
+  const [editingDescription, setEditingDescription] =
+    useState<string>("");
   const [editingSaving, setEditingSaving] = useState(false);
 
   // ---- QUICK ADD BAR (CENTER TOP) ----
@@ -146,217 +147,254 @@ export default function DashboardPage() {
   const [quickDate, setQuickDate] = useState("");
   const [quickDescription, setQuickDescription] = useState("");
   const [quickSaving, setQuickSaving] = useState(false);
-  
+    // ---- PRINT / PDF ----
+  const [printDialogOpen, setPrintDialogOpen] = useState(false);
+
+
   // ---- SIMPLE BUDGETS (RIGHT SIDEBAR, LOCAL ONLY FOR NOW) ----
-  const [categoryBudgets, setCategoryBudgets] = useState<Record<string, number>>(
-    {}
-  );
+  const [categoryBudgets, setCategoryBudgets] =
+    useState<Record<string, number>>(DEFAULT_CATEGORY_BUDGETS);
 
-  // Load budgets from localStorage
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("ft-budgets");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === "object") {
-          setCategoryBudgets(parsed);
-        }
-      }
-    } catch (err) {
-      console.error("Error loading budgets:", err);
-    }
-  }, []);
+// ---- REPORT / PDF RANGE ----
 
-  // Save budgets to localStorage whenever they change
-  useEffect(() => {
-    try {
-      localStorage.setItem("ft-budgets", JSON.stringify(categoryBudgets));
-    } catch (err) {
-      console.error("Error saving budgets:", err);
-    }
-  }, [categoryBudgets]);
+// ---- REPORT / PDF RANGE ----
 
-  // ---- LOAD / SAVE CATEGORIES & BUDGETS (LEFT BAR ORDER + BUDGETS) ----
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+type ReportRangeMode = "thisMonth" | "lastMonth" | "lastNDays" | "current" | "custom";
 
-    try {
-      const storedCats = window.localStorage.getItem(CATEGORIES_STORAGE_KEY);
-      if (storedCats) {
-        const parsed = JSON.parse(storedCats) as Category[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setCategories(parsed);
-        }
-      }
+// what kind of period we are showing in the report / PDF
+const [reportRangeMode, setReportRangeMode] = useState<ReportRangeMode>("lastNDays");
 
-      const storedBudgets = window.localStorage.getItem(BUDGETS_STORAGE_KEY);
-      if (storedBudgets) {
-        const parsedBudgets = JSON.parse(storedBudgets) as Record<
-          string,
-          number
-        >;
-        if (parsedBudgets && typeof parsedBudgets === "object") {
-          setCategoryBudgets((prev) => ({
-            ...prev,
-            ...parsedBudgets,
-          }));
-        }
-      }
-    } catch {
-      // ignore parsing errors
-    }
-  }, []);
+// for the custom date range (stored as date strings "YYYY-MM-DD")
+const [customStart, setCustomStart] = useState<string>("");
+const [customEnd, setCustomEnd] = useState<string>("");
 
-  useEffect(() => {
-    if (categoryListRef.current) {
-      categoryListRef.current.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  }, [selectedCategoryName]); // <- use your actual selected category state here
+// are we using the custom range right now?
+const usingCustomRange =
+  reportRangeMode === "custom" && !!customStart && !!customEnd;
+
+// base rolling window (same as dashboard view)
+const today = new Date();
+const todayStr = today.toISOString().slice(0, 10);
+
+const windowStartDate = new Date(
+  today.getFullYear(),
+  today.getMonth(),
+  today.getDate() - (windowDays - 1)
+);
+const windowStartStr = windowStartDate.toISOString().slice(0, 10);
+
+// unified period start/end used by inputs and reports
+const periodStart = usingCustomRange && customStart ? customStart : windowStartStr;
+const periodEnd = usingCustomRange && customEnd ? customEnd : todayStr;
+
+// label that appears in the summary / PDF header
+const periodLabel = usingCustomRange
+  ? `${formatDate(customStart)} – ${formatDate(customEnd)}`
+  : `Last ${windowDays} days`;
+
+// ---- PICK WHICH TRANSACTIONS GO INTO THE PDF REPORT ----
+
+function getReportTransactions(all: Transaction[]): Transaction[] {
+  // helpers
+  const parse = (s: string) => new Date(s + "T00:00:00");
+
+  // this month = current calendar month
+  if (reportRangeMode === "thisMonth") {
+    const year = today.getFullYear();
+    const month = today.getMonth(); // 0-based
+    return all.filter((t) => {
+      const d = parse(t.date);
+      return d.getFullYear() === year && d.getMonth() === month;
+    });
+  }
+
+  // last month = full previous calendar month
+  if (reportRangeMode === "lastMonth") {
+    const year = today.getFullYear();
+    const month = today.getMonth(); // 0-based
+    const lastMonthDate = new Date(year, month - 1, 1);
+    const lastYear = lastMonthDate.getFullYear();
+    const lastMonth = lastMonthDate.getMonth();
+
+    return all.filter((t) => {
+      const d = parse(t.date);
+      return d.getFullYear() === lastYear && d.getMonth() === lastMonth;
+    });
+  }
+
+  // "custom" / "current" / "lastNDays" all use periodStart / periodEnd
+  const start = parse(periodStart);
+  const end = parse(periodEnd);
+
+  return all.filter((t) => {
+    const d = parse(t.date);
+    return d >= start && d <= end;
+  });
+}
+
+// transactions actually used in the report
+const reportTransactions = getReportTransactions(transactions);
+const {
+  income: reportIncome,
+  expenses: reportExpenses,
+  net: reportNet,
+} = summarize(reportTransactions);
+
+// label that appears next to the "Download report" button
+function reportRangeLabel(): string {
+  if (reportRangeMode === "thisMonth") return "This month";
+  if (reportRangeMode === "lastMonth") return "Last month";
+
+  if (reportRangeMode === "custom" && customStart && customEnd) {
+    return `Custom: ${formatDate(customStart)} – ${formatDate(customEnd)}`;
+  }
+
+  // "current" or "lastNDays" -> whatever is on screen
+  return `Current view (${periodLabel})`;
+}
+
+// ---- APPLY CUSTOM RANGE (PRO) ----
+
+async function handleApplyCustomRange() {
+  if (!customStart || !customEnd) {
+    alert("Please choose both start and end dates.");
+    return;
+  }
+
+  if (customStart > customEnd) {
+    alert("Start date must be before end date.");
+    return;
+  }
+
+  // Switch the report mode to use the custom range.
+  setReportRangeMode("custom");
+}
+
+function handleResetRange() {
+  // Return to the normal mode (Last 30 days, 60 days, etc.)
+  setReportRangeMode("lastNDays");
+
+  // Clear custom inputs
+  setCustomStart("");
+  setCustomEnd("");
+
+  // Restore default time window
+  setWindowDays(30);
+
+  // Optionally — you can force refresh, but not needed:
+  // setRefreshFlag(Math.random());
+}
 
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(
-        CATEGORIES_STORAGE_KEY,
-        JSON.stringify(categories)
-      );
-    } catch {
-      // ignore storage errors
-    }
-  }, [categories]);
+// ---- EFFECTIVE DATE RANGE FOR TRANSACTIONS ----
+const effectiveStartDate =
+  reportRangeMode === "custom" && customStart
+    ? customStart
+    : windowStartStr;
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(
-        BUDGETS_STORAGE_KEY,
-        JSON.stringify(categoryBudgets)
-      );
-    } catch {
-      // ignore storage errors
-    }
-  }, [categoryBudgets]);
+const effectiveEndDate =
+  reportRangeMode === "custom" && customEnd
+    ? customEnd
+    : todayStr;
 
-  // ---- LOAD CATEGORY ORDER FROM SUPABASE ----
-  useEffect(() => {
-    if (!userId) return;
-    
+// ---- LOAD TRANSACTIONS FROM SUPABASE ----
+useEffect(() => {
+  async function loadTransactions() {
+    if (authLoading) return;
 
-    async function loadCategoryOrder() {
-      console.log("Loading category order for user:", userId);
-
-      const { data, error } = await supabase
-        .from("users")
-        .select("category_order")
-        .eq("id", userId)
-        .single();
-
-      if (error) {
-        console.warn("Could not load category order:", error.message);
-        // Fall back to defaults
-        setCategories(DEFAULT_CATEGORIES);
-        setCategoriesLoaded(true);
-        return;
-      }
-
-      const saved = data?.category_order;
-
-      if (Array.isArray(saved) && saved.length > 0) {
-        console.log("Using saved category order from Supabase:", saved);
-        const restored: Category[] = saved.map((item: any) => ({
-          name: item.name,
-          type: item.type as TransactionType,
-        }));
-        setCategories(restored);
-        setCategoriesLoaded(true);
-      } else {
-        console.log("No saved category order; using defaults");
-        setCategories(DEFAULT_CATEGORIES);
-        setCategoriesLoaded(true);
-      }
-    }
-
-    loadCategoryOrder();
-  }, [userId]);
-
-  // ---- SAVE CATEGORY ORDER TO SUPABASE ----
-  useEffect(() => {
-    if (!userId || !categoriesLoaded) {
-      if (!categoriesLoaded) {
-        console.log("Skip saving categories: not loaded from DB yet");
-      }
+    if (!user) {
+      router.push("/login");
       return;
     }
 
-    console.log("Saving category order to Supabase:", categories);
+    setLoading(true);
+    setErrorMessage(null);
 
-    async function saveCategoryOrder() {
-      const payload = categories.map((c) => ({
-        name: c.name,
-        type: c.type,
-      }));
+    // store for other parts of the dashboard
+    setUserEmail(user.email ?? null);
+    setUserId(user.id);
 
-      const { error } = await supabase
-        .from("users")
-        .update({ category_order: payload })
-        .eq("id", userId);
-
-      if (error) {
-        console.error("Error saving category order:", error.message);
-      } else {
-        console.log("Successfully saved category order!");
-      }
-    }
-
-    saveCategoryOrder();
-  }, [categories, userId, categoriesLoaded]);
-
-  // ---- LOAD TRANSACTIONS FROM SUPABASE ----
-// at top of component you already have:
-// const { user, loading: authLoading } = useAuth();
-// const [profile, setProfile] = useState<any>(null);
-// const isPro = profile?.plan?.trim().toLowerCase() === "pro";
-
-useEffect(() => {
-  if (authLoading) return;
-  if (!user) return;
-
-  let cancelled = false;
-
-  async function loadProfile() {
     const { data, error } = await supabase
-      .from("profiles")
-      .select("plan")
-      .eq("id", user?.id)      // matches the 'id' column in your profiles table
-      .maybeSingle();
+      .from("transactions")
+      .select("*")
+      .eq("user_id", user.id)
+      .gte("date", effectiveStartDate)
+      .lte("date", effectiveEndDate)
+      .order("date", { ascending: false });
 
     if (error) {
-      console.error("Error loading profile:", error);
+      console.error("Error loading transactions:", error);
+      setErrorMessage(error.message);
+      setLoading(false);
       return;
     }
 
-    if (!data || cancelled) {
-      console.log("No profile row found for user yet:", user?.id);
+    setTransactions((data ?? []) as Transaction[]);
+    setLoading(false);
+  }
+
+  loadTransactions();
+}, [
+  authLoading,
+  user,
+  windowStartStr,
+  reportRangeMode,
+  customStart,
+  customEnd,
+  router,
+]);
+
+
+
+
+
+
+//INSERT VARIABLE HERE?// const effectiveStartdate....
+
+// ---- LOAD TRANSACTIONS FROM SUPABASE ----
+useEffect(() => {
+  async function loadTransactions() {
+    if (authLoading) return;
+
+    if (!user) {
+      router.push("/login");
       return;
     }
 
-    console.log("Loaded profile:", data);
-    setProfile(data);
+    setLoading(true);
+    setErrorMessage(null);
+
+    // store for other parts of the dashboard
+    setUserEmail(user.email ?? null);
+    setUserId(user.id);
+
+    const { data, error } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("user_id", user.id)
+      .gte("date", windowStartStr) // Last 30/60/90/custom start
+      .order("date", { ascending: false });
+
+    if (error) {
+      console.error("Error loading transactions:", error);
+      setErrorMessage(error.message);
+      setLoading(false);
+      return;
+    }
+
+    setTransactions((data ?? []) as Transaction[]);
+    setLoading(false);
   }
 
-  loadProfile();
+  loadTransactions();
+}, [authLoading, user, windowStartStr, router]);
 
-  return () => {
-    cancelled = true;
-  };
-}, [authLoading, user]);
+// ---- LOGOUT ----
+async function handleLogout() {
+  await supabase.auth.signOut();
+  router.push("/login");
+}
 
-  // ---- LOGOUT ----
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    router.push("/login");
-  }
 
   // ---- CATEGORY & ENTRY HANDLERS (LEFT BAR + CENTER) ----
   function handleAddCategory(e: FormEvent) {
@@ -372,41 +410,51 @@ useEffect(() => {
     setNewCategoryType("expense");
   }
 
-  async function handleAddCategoryEntry(e: FormEvent, categoryName: string) {
-    e.preventDefault();
-    setErrorMessage(null);
+async function handleAddCategoryEntry(
+  e: FormEvent,
+  categoryName: string
+) {
+  e.preventDefault();
+  setErrorMessage(null);
 
-    if (!userId) {
-      setErrorMessage("You must be logged in to add entries.");
-      return;
-    }
+  // Must have a logged-in user
+  if (!userId) {
+    setErrorMessage("You must be logged in to add entries.");
+    return;
+  }
 
-    const cat = categories.find((c) => c.name === categoryName);
-    if (!cat) {
-      setErrorMessage("Category not found.");
-      return;
-    }
+  // Category must exist
+  const cat = categories.find((c) => c.name === categoryName);
+  if (!cat) {
+    setErrorMessage("Category not found.");
+    return;
+  }
 
-    if (!formAmount || !formDate) {
-      setErrorMessage("Please fill amount and date.");
-      return;
-    }
+  // Form validation
+  if (!formAmount || !formDate) {
+    setErrorMessage("Please fill amount and date.");
+    return;
+  }
 
-    const amountNumber = Number(formAmount);
-    if (Number.isNaN(amountNumber) || amountNumber <= 0) {
-      setErrorMessage("Amount must be a positive number.");
-      return;
-    }
+  const amountNumber = Number(formAmount);
+  if (Number.isNaN(amountNumber) || amountNumber <= 0) {
+    setErrorMessage("Amount must be a positive number.");
+    return;
+  }
 
-    const chosen = new Date(formDate);
-    if (chosen < windowStart || chosen > today) {
-      setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
-      return;
-    }
+  // Validate date inside window days
+  const chosen = new Date(formDate);
+  if (chosen < new Date(periodStart) || chosen > today) {
+    setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
+    return;
+  }
 
-    setSaving(true);
+  setSaving(true);
 
-    const { error } = await supabase.from("transactions").insert({
+  // ---- INSERT INTO SUPABASE ----
+  const { error: insertError } = await supabase
+    .from("transactions")
+    .insert({
       user_id: userId,
       type: cat.type,
       amount: amountNumber,
@@ -415,160 +463,159 @@ useEffect(() => {
       description: formDescription || null,
     });
 
-    if (error) {
-      setErrorMessage(error.message);
-      setSaving(false);
-      return;
-    }
-
-    const { data, error: txError } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("user_id", userId)
-      .gte("date", windowStartStr)
-      .order("date", { ascending: false })
-      .order("created_at", { ascending: false });
-
-    if (txError) {
-      setErrorMessage(txError.message);
-    } else {
-      setTransactions((data ?? []) as Transaction[]);
-    }
-
+  if (insertError) {
+    setErrorMessage(insertError.message);
     setSaving(false);
-    setFormAmount("");
-    setFormDescription("");
-    setExpandedCategory(null);
-  }
-
-  async function handleQuickAdd(e: FormEvent) {
-  e.preventDefault();
-  setErrorMessage(null);
-
-  if (!userId) {
-    setErrorMessage("You must be logged in to add entries.");
     return;
   }
 
-  if (!quickCategory) {
-    setErrorMessage("Please choose a category.");
-    return;
+  // ---- RELOAD TRANSACTIONS ----
+  const { data: txRows, error: txError } = await supabase
+    .from("transactions")
+    .select("*")
+    .eq("user_id", userId)
+    .gte("date", periodStart)
+    .order("date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (txError) {
+    setErrorMessage(txError.message);
+  } else {
+    setTransactions((txRows ?? []) as Transaction[]);
   }
 
-  // 🔍 Find the matching category object
-  const cat = categories.find((c) => c.name === quickCategory);
-  
-  if (!cat) {
-  console.warn("Quick Add: category not found", {
-    quickCategory,
-    categories: categories.map((c) => c.name),
-  });
-
-  // Try to auto-fix by resetting Quick Add to a valid category
-  if (categories.length > 0) {
-    setQuickCategory(categories[0].name);
-  }
-
-  setErrorMessage("Category not found for Quick Add. Please pick a category again.");
-  return;
+  // Reset UI
+  setSaving(false);
+  setFormAmount("");
+  setFormDescription("");
+  setExpandedCategory(null);
 }
 
+    function handlePrintReport() {
+    if (typeof window !== "undefined") {
+          window.print();
+        }
+    }
+  // ---- QUICK ADD ----
+  async function handleQuickAdd(e: FormEvent) {
+    e.preventDefault();
+    setErrorMessage(null);
 
-  const catName = cat.name;
-  const type: TransactionType = cat.type;
-
-  if (!quickAmount || !quickDate) {
-    setErrorMessage("Please fill amount and date.");
-    return;
-  }
-
-  const amountNumber = Number(quickAmount);
-  if (Number.isNaN(amountNumber) || amountNumber <= 0) {
-    setErrorMessage("Amount must be a positive number.");
-    return;
-  }
-
-  const chosen = new Date(quickDate);
-  if (chosen < windowStart || chosen > today) {
-    setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
-    return;
-  }
-
-  setQuickSaving(true);
-
-  console.log("Quick Add submit", {
-    quickCategory,
-    catName,
-    type,
-    amountNumber,
-    quickDate,
-    quickDescription,
-  });
-
-  try {
-    // ⬇ INSERT and get the inserted row back
-    const { data: insertedRows, error: insertError } = await supabase
-      .from("transactions")
-      .insert({
-        user_id: userId,
-        type,
-        amount: amountNumber,
-        date: quickDate,
-        category: catName, // ✅ resolved category name
-        description: quickDescription || null,
-      })
-      .select(); // <-- important so we get the new id
-
-    if (insertError) {
-      console.error("Quick Add insert error:", insertError);
-      setErrorMessage(insertError.message);
+    if (!userId) {
+      setErrorMessage("You must be logged in to add entries.");
       return;
     }
 
-    let newId: string | null = null;
-    if (insertedRows && insertedRows.length > 0) {
-      newId = insertedRows[0].id as string;
+    if (!quickCategory) {
+      setErrorMessage("Please choose a category.");
+      return;
     }
 
-    // 🔁 Reload the window's transactions so category cards & totals update
-    const { data, error: txError } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("user_id", userId)
-      .gte("date", windowStartStr)
-      .order("date", { ascending: false });
+    const cat = categories.find((c) => c.name === quickCategory);
 
-    if (txError) {
-      console.error("Quick Add reload error:", txError);
-      setErrorMessage(txError.message);
-    } else {
-      setTransactions((data ?? []) as Transaction[]);
+      if (!cat) {
+        console.warn("Quick Add: category not found", {
+          quickCategory,
+          categories: categories.map((c) => c.name),
+        });
+
+        if (categories.length > 0) {
+          setQuickCategory(categories[0].name);
+        }
+
+        setErrorMessage(
+          "Category not found for Quick Add. Please pick a category again."
+        );
+        return;
+      }
+
+      if (!quickAmount || !quickDate) {
+        setErrorMessage("Please fill amount and date.");
+        return;
+      }
+      
+      const amountNumber = Number(quickAmount);
+      if (Number.isNaN(amountNumber) || amountNumber <= 0) {
+        setErrorMessage("Amount must be a positive number.");
+        return;
+      }
+
+        const chosen = new Date(quickDate);
+        const periodStartDate = new Date(periodStart);
+
+        if (chosen < periodStartDate || chosen > today) {
+          setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
+          return;
+        }
+              
+      setQuickSaving(true);
+        console.log("Quick Add submit", {
+          quickCategory,
+          amountNumber,
+          quickDate,
+          quickDescription,
+          });
+
+    try {
+      const { data: insertedRows, error: insertError } = await supabase
+        .from("transactions")
+        .insert({
+          user_id: userId,
+          type: cat.type,
+          amount: amountNumber,
+          date: quickDate,
+          category: cat.name,
+          description: quickDescription || null,
+        })
+        .select();
+
+      if (insertError) {
+        console.error("Quick Add insert error:", insertError);
+        setErrorMessage(insertError.message);
+        return;
+      }
+
+      let newId: string | null = null;
+      if (insertedRows && insertedRows.length > 0) {
+        newId = insertedRows[0].id as string;
+      }
+
+      const { data, error: txError } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("user_id", userId)
+        .gte("date", periodStart)
+        .order("date", { ascending: false });
+
+      if (txError) {
+        console.error("Quick Add reload error:", txError);
+        setErrorMessage(txError.message);
+      } else {
+        setTransactions((data ?? []) as Transaction[]);
+      }
+
+      if (newId) {
+        setHighlightedTxId(newId);
+      }
+
+      setQuickAmount("");
+      setQuickDescription("");
+      setQuickDate(todayStr);
+      // keep quickCategory so user can add multiple entries in same category
+    } finally {
+      setQuickSaving(false);
+    }
+ }
+
+    function startEdit(t: Transaction) {
+      setEditingId(t.id);
+      setEditingAmount(String(t.amount));
+      setEditingCategory(t.category);
+      setEditingDate(t.date);
+      setEditingDescription(t.description ?? "");
     }
 
-    // ✨ Highlight the new transaction row (Option C)
-    if (newId) {
-      setHighlightedTxId(newId);
-    }
-
-    // 🔄 Reset inputs
-    setQuickAmount("");
-    setQuickDescription("");
-    setQuickDate(todayStr);
-    // ⚠️ do NOT reset quickCategory, so the user can add multiple in same category
-  } finally {
-    setQuickSaving(false);
-  }
-}
-
-  function startEdit(t: Transaction) {
-    setEditingId(t.id);
-    setEditingAmount(String(t.amount));
-    setEditingCategory(t.category);
-    setEditingDate(t.date);
-    setEditingDescription(t.description ?? "");
-  }
-
-  function cancelEdit() {
+   function cancelEdit() {
     setEditingId(null);
     setEditingAmount("");
     setEditingDate("");
@@ -594,7 +641,7 @@ useEffect(() => {
     }
 
     const chosen = new Date(editingDate);
-    if (chosen < windowStart || chosen > today) {
+   if (new Date(chosen) < new Date(periodStart) || new Date(chosen) > today) {
       setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
       return;
     }
@@ -621,7 +668,7 @@ useEffect(() => {
       .from("transactions")
       .select("*")
       .eq("user_id", userId)
-      .gte("date", windowStartStr)
+      .gte("date", periodStart)
       .order("date", { ascending: false });
 
     if (txError) {
@@ -660,13 +707,30 @@ useEffect(() => {
       .from("transactions")
       .select("*")
       .eq("user_id", userId)
-      .gte("date", windowStartStr)
+      .gte("date", periodStart)
       .order("date", { ascending: false });
 
     if (txError) {
       setErrorMessage(txError.message);
     } else {
       setTransactions((data ?? []) as Transaction[]);
+    }
+  }
+
+      // ---- PRINT / PDF HANDLERS ----
+  function openPrintDialog() {
+    setPrintDialogOpen(true);
+  }
+
+  function closePrintDialog() {
+    setPrintDialogOpen(false);
+  }
+
+  function handleConfirmPrint(e: FormEvent) {
+    e.preventDefault();
+    setPrintDialogOpen(false);
+    if (typeof window !== "undefined") {
+      window.print();
     }
   }
 
@@ -695,69 +759,113 @@ useEffect(() => {
     });
   }
 
+  
   // ---- DEFAULT DATES & QUICK CATEGORY ----
   useEffect(() => {
     if (!formDate) setFormDate(todayStr);
     if (!quickDate) setQuickDate(todayStr);
   }, [formDate, quickDate, todayStr]);
 
- useEffect(() => {
-  if (categories.length === 0) return;
-
-  // Does the current quickCategory still exist?
-  const exists = categories.some((c) => c.name === quickCategory);
-
-  // If nothing selected yet OR the selected one was renamed/deleted,
-  // reset Quick Add to the first category.
-  if (!quickCategory || !exists) {
-    setQuickCategory(categories[0].name);
-  }
-}, [categories, quickCategory]);
-
-
   useEffect(() => {
-  if (!highlightedTxId) return;
+    if (categories.length === 0) return;
 
-  const timer = setTimeout(() => {
-    setHighlightedTxId(null);
-  }, 2000);
+    const exists = categories.some((c) => c.name === quickCategory);
 
-  return () => clearTimeout(timer);
-}, [highlightedTxId]);
+    if (!quickCategory || !exists) {
+      setQuickCategory(categories[0].name);
+    }
+  }, [categories, quickCategory]);
+
+  // ---- HIGHLIGHT TIMER ----
+  useEffect(() => {
+    if (!highlightedTxId) return;
+
+    const timer = setTimeout(() => {
+      setHighlightedTxId(null);
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [highlightedTxId]);
+
+    // ---- SET USER ID / EMAIL AND LOAD PROFILE (PLAN) ----
 
 useEffect(() => {
-  if (!userId) return;
+  if (authLoading) return;
+  if (!user) return;
 
-  let cancelled = false;
+  setUserEmail(user.email ?? null);
+  setUserId(user.id);
 
+  // capture the id after we've confirmed user exists
+  const userId = user.id;
+
+  // NEW: load profile (plan) from Supabase
   async function loadProfile() {
     const { data, error } = await supabase
       .from("profiles")
       .select("plan")
-      .eq("id", userId)   // matches the 'id' column in your screenshot
-      .maybeSingle();
+      .eq("id", userId)   // <-- use userId here
+      .single();
 
     if (error) {
-      console.error("Error loading profile:", {
-        message: (error as any).message,
-        details: (error as any).details,
-        hint: (error as any).hint,
-        code: (error as any).code,
-      });
+      console.error("Error loading profile:", error);
       return;
     }
-
-    if (!data || cancelled) return;
 
     setProfile(data);
   }
 
   loadProfile();
+}, [authLoading, user]);
 
-  return () => {
-    cancelled = true;
-  };
-}, [userId]);
+// ---- LOAD CATEGORIES FOR THIS USER ----
+useEffect(() => {
+  // Wait for auth to finish
+  if (authLoading) return;
+  if (!user) return;
+
+  // Capture a safe, stable user id
+  const userId = user.id;
+
+  async function loadCategories() {
+    if (!userId) return;
+
+    setErrorMessage(null);
+
+    const { data, error } = await supabase
+      .from("categories")
+      .select("*")
+      .eq("user_id", userId)
+      .order("name", { ascending: true });   // ✅ order by existing "name" column
+
+
+    if (error) {
+      console.error("Error loading categories:", error);
+      setErrorMessage(error.message);
+      return;
+    }
+
+    let loadedCats;
+
+    // If no categories in DB → use your default template
+    if (!data || data.length === 0) {
+      // ⚠️ IMPORTANT: replace DEFAULT_CATEGORIES with your actual constant
+      loadedCats = DEFAULT_CATEGORIES;
+    } else {
+      loadedCats = data.map((row) => ({
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        budget: row.budget ?? 0,
+      }));
+    }
+
+    setCategories(loadedCats);
+    setCategoriesLoaded(true);
+  }
+
+  loadCategories();
+}, [authLoading, user]);
 
 
 
@@ -818,8 +926,103 @@ useEffect(() => {
 
   // ---- MAIN LAYOUT ----
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="flex min-h-screen">
+  
+    <main className="screen-only min-h-screen bg-slate-950 text-slate-100">
+      
+      {/* Print styling: keep dark dashboard look in PDF */}
+      <style jsx global>{`
+        @media print {
+          body {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          .no-print {
+            display: none !important;
+          }
+          .print-page {
+            background: #020617 !important; /* slate-950 */
+          }
+          .transactions-scroll,
+          .budget-scroll {
+            max-height: none !important;
+            overflow: visible !important;
+          }
+        }
+      `}</style>
+
+      {/* PRINT DIALOG (overlay) – only on screen, hidden in PDF */}
+      {printDialogOpen && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-md rounded-xl bg-slate-900 border border-slate-700 p-5 shadow-2xl text-xs text-slate-100 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Export as PDF</h2>
+              <button
+                type="button"
+                onClick={closePrintDialog}
+                className="text-slate-400 hover:text-slate-100 text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-slate-300">
+              This will print your current dashboard view. In your browser&apos;s
+              print dialog choose{" "}
+              <span className="font-semibold">&quot;Save as PDF&quot;</span>.
+            </p>
+
+            <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
+              <p className="text-[11px] text-slate-300 font-medium mb-1">
+                Time range
+              </p>
+              <p className="text-[11px] text-slate-400">
+                The PDF uses the{" "}
+                <span className="font-semibold">
+                  Time ▸ Last {windowDays} days
+                </span>{" "}
+                selection in the top bar. Change that first if you want a
+                different range.
+              </p>
+            </div>
+
+            {isPro ? (
+              <p className="text-[11px] text-emerald-300">
+                Pro roadmap: next step we can add{" "}
+                <span className="font-semibold">
+                  This month / Last month / Custom
+                </span>{" "}
+                presets here.
+              </p>
+            ) : (
+              <p className="text-[11px] text-slate-400">
+                Upgrade to Pro later to unlock richer PDF options like full
+                monthly reports and custom ranges.
+              </p>
+            )}
+
+            <form
+              onSubmit={handleConfirmPrint}
+              className="flex justify-end gap-2 pt-1"
+            >
+              <button
+                type="button"
+                onClick={closePrintDialog}
+                className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold"
+              >
+                Print / Save as PDF
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <div className="flex min-h-screen no-print">
         {/* ========================= */}
         {/* LEFT SIDEBAR             */}
         {/* ========================= */}
@@ -876,7 +1079,7 @@ useEffect(() => {
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity no-print">
                           <button
                             type="button"
                             onClick={(e) => {
@@ -916,7 +1119,7 @@ useEffect(() => {
                       {isExpanded && (
                         <form
                           onSubmit={(e) => handleAddCategoryEntry(e, cat.name)}
-                          className="px-3 pb-3 pt-2 border-t border-slate-800 space-y-2 text-[11px]"
+                          className="px-3 pb-3 pt-2 border-t border-slate-800 space-y-2 text-[11px] no-print"
                         >
                           <div className="text-[10px] text-slate-400 mb-1">
                             Add{" "}
@@ -945,8 +1148,8 @@ useEffect(() => {
                             </label>
                             <input
                               type="date"
-                              min={windowStartStr}
-                              max={todayStr}
+                              min={periodStart}
+                              max={periodEnd}
                               value={formDate}
                               onChange={(e) => setFormDate(e.target.value)}
                               className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
@@ -986,7 +1189,7 @@ useEffect(() => {
             {/* ADD CATEGORY FORM */}
             <form
               onSubmit={handleAddCategory}
-              className="space-y-1 text-[11px]"
+              className="space-y-1 text-[11px] no-print"
             >
               <label className="block text-slate-400 px-1">Add category</label>
               <div className="flex flex-wrap gap-1">
@@ -1020,7 +1223,7 @@ useEffect(() => {
             </form>
 
             {/* LEFT SIDEBAR FOOTER */}
-            <div className="mt-auto pt-3 border-t border-slate-800">
+            <div className="mt-auto pt-3 border-t border-slate-800 no-print">
               <button
                 type="button"
                 className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-900 text-slate-300 text-[11px]"
@@ -1058,7 +1261,7 @@ useEffect(() => {
               <span>Live money session</span>
             </div>
 
-            {/* Right side: Plan badge + Time + Dark mode + User + Logout */}
+            {/* Right side: Plan badge + Time + Print + Dark mode + User + Logout */}
             <div className="flex items-center gap-3 text-xs text-slate-200">
               {/* Plan badge */}
               <span
@@ -1071,25 +1274,78 @@ useEffect(() => {
                 {isPro ? "PRO" : "FREE"}
               </span>
 
-              {/* Time selector */}
-              <div className="flex items-center gap-2">
-                <span className="text-slate-400">Time:</span>
-                <select
-                  className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs"
-                  value={windowDays}
-                  onChange={(e) => setWindowDays(Number(e.target.value))}
-                >
-                  {DAY_OPTIONS.map((days) => (
-                    <option key={days} value={days}>
-                      Last {days} days
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {/* Time selector + custom range (Pro) */}
+                <div className="flex items-center gap-3">
+                  {/* Quick presets */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400">Time:</span>
+                    <select
+                      className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs"
+                      value={windowDays}
+                      onChange={(e) => {
+                       setReportRangeMode("lastNDays");   // return to rolling preset mode
+                       setWindowDays(Number(e.target.value));
+                      }}
+                    >
+                      {DAY_OPTIONS.map((days) => (
+                        <option key={days} value={days}>
+                          Last {days} days
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Custom range (Pro only) */}
+                  {isPro && (
+                    <div className="flex items-center gap-1 text-[11px]">
+                      <span className="text-slate-400">or Custom:</span>
+                      <input
+                        type="date"
+                        
+                        value={customStart}
+                        onChange={(e) => setCustomStart(e.target.value)}
+                        className="bg-slate-900 border border-slate-700 rounded px-2 py-1"
+                      />
+                      <span className="text-slate-500">to</span>          
+                        
+                        <input
+                        type="date"
+                        value={customEnd}
+                        onChange={(e) => setCustomEnd(e.target.value)}
+                        className="bg-slate-900 border border-slate-700 rounded px-2 py-1"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleApplyCustomRange}
+                        className="px-2 py-1 rounded bg-emerald-500 hover:bg-emerald-400 text-[11px] font-medium"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+
+              {/* Print / PDF button */}
+              
+                  <button
+                    type="button"
+                    onClick={handlePrintReport}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[11px] font-medium"
+                    >
+                    Print / PDF
+                    </button>
+
+                    <button
+                    onClick={handleLogout}
+                    className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-500 text-[11px] font-medium"
+                    >
+                    Log out
+                  </button>
 
               {/* Dark Mode (placeholder) */}
               <button
-                className="px-3 py-1 rounded-full border border-slate-600 text-xs text-slate-300 cursor-not-allowed opacity-60"
+                className="no-print px-3 py-1 rounded-full border border-slate-600 text-xs text-slate-300 cursor-not-allowed opacity-60"
                 disabled
               >
                 Dark mode
@@ -1108,7 +1364,7 @@ useEffect(() => {
               {/* Logout */}
               <button
                 onClick={handleLogout}
-                className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-500 text-[11px] font-medium"
+                className="no-print px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-500 text-[11px] font-medium"
               >
                 Log out
               </button>
@@ -1116,7 +1372,7 @@ useEffect(() => {
           </header>
 
           {/* QUICK ADD BAR */}
-          <div className="border-b border-slate-900 bg-slate-950/90 px-4 py-3 text-[11px]">
+          <div className="border-b border-slate-900 bg-slate-950/90 px-4 py-3 text-[11px] no-print">
             <form
               onSubmit={handleQuickAdd}
               className="flex flex-wrap items-center gap-2 md:gap-3"
@@ -1152,8 +1408,8 @@ useEffect(() => {
               {/* Date */}
               <input
                 type="date"
-                min={windowStartStr}
-                max={todayStr}
+                min={periodStart}
+                max={periodEnd}
                 value={quickDate}
                 onChange={(e) => setQuickDate(e.target.value)}
                 className="rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
@@ -1178,8 +1434,6 @@ useEffect(() => {
               </button>
             </form>
           </div>
-
-
 
           {/* ========================= */}
           {/* MAIN GRID (SUMMARY + LISTS) */}
@@ -1290,7 +1544,7 @@ useEffect(() => {
                     {editingId && (
                       <form
                         onSubmit={handleSaveEdit}
-                        className="mb-3 p-2 rounded-lg border border-slate-700 bg-slate-950 space-y-2 text-[11px]"
+                        className="mb-3 p-2 rounded-lg border border-slate-700 bg-slate-950 space-y-2 text-[11px] no-print"
                       >
                         <div className="text-[10px] text-slate-400">
                           Editing entry
@@ -1319,8 +1573,8 @@ useEffect(() => {
                             </label>
                             <input
                               type="date"
-                              min={windowStartStr}
-                              max={todayStr}
+                              min={periodStart}
+                              max={periodEnd}
                               value={editingDate}
                               onChange={(e) =>
                                 setEditingDate(e.target.value)
@@ -1363,101 +1617,6 @@ useEffect(() => {
                       </form>
                     )}
 
-                      {editingId && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-                          <div className="w-full max-w-md rounded-xl bg-slate-900 border border-slate-700 p-5 shadow-2xl space-y-4">
-                            
-                            {/* Header */}
-                            <div className="flex items-center justify-between">
-                              <h2 className="text-sm font-semibold text-slate-100">Edit Transaction</h2>
-                              <button
-                                type="button"
-                                onClick={cancelEdit}
-                                className="text-slate-400 hover:text-slate-100 text-xs"
-                              >✕</button>
-                            </div>
-
-                            {/* Edit FORM */}
-                            <form onSubmit={handleSaveEdit} className="space-y-3 text-xs">
-                              
-                              {/* AMOUNT */}
-                              <div className="flex flex-col gap-1">
-                                <label className="text-slate-300">Amount</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  value={editingAmount}
-                                  onChange={(e) => setEditingAmount(e.target.value)}
-                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1 
-                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                />
-                              </div>
-
-                              {/* CATEGORY */}
-                              <div className="flex flex-col gap-1">
-                                <label className="text-slate-300">Category</label>
-                                <select
-                                  value={editingCategory}
-                                  onChange={(e) => setEditingCategory(e.target.value)}
-                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
-                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                >
-                                  {categories.map((cat) => (
-                                    <option key={cat.name} value={cat.name}>{cat.name}</option>
-                                  ))}
-                                </select>
-                              </div>
-
-                              {/* DATE */}
-                              <div className="flex flex-col gap-1">
-                                <label className="text-slate-300">Date</label>
-                                <input
-                                  type="date"
-                                  value={editingDate}
-                                  onChange={(e) => setEditingDate(e.target.value)}
-                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
-                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                />
-                              </div>
-
-                              {/* NOTE */}
-                              <div className="flex flex-col gap-1">
-                                <label className="text-slate-300">Description</label>
-                                <input
-                                  type="text"
-                                  value={editingDescription}
-                                  onChange={(e) => setEditingDescription(e.target.value)}
-                                  className="rounded-md bg-slate-950 border border-slate-700 px-2 py-1
-                                            focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                  placeholder="Optional note"
-                                />
-                              </div>
-
-                              {/* BUTTONS */}
-                              <div className="flex justify-end gap-2 pt-2">
-                                <button
-                                  type="button"
-                                  onClick={cancelEdit}
-                                  className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-200 text-[11px]"
-                                >Cancel</button>
-
-                                <button
-                                  type="submit"
-                                  disabled={editingSaving}
-                                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400
-                                            disabled:opacity-60 text-[11px] font-medium"
-                                >
-                                  {editingSaving ? "Saving..." : "Save Changes"}
-                                </button>
-                              </div>
-
-                            </form>
-                          </div>
-                        </div>
-                      )}
-
-
                     <ul
                       ref={categoryListRef}
                       className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll"
@@ -1465,14 +1624,11 @@ useEffect(() => {
                       {categoryTransactions.map((t) => (
                         <li
                           key={t.id}
-                          className={`
-                            flex items-center justify-between rounded-md px-2 py-1.5
-                            border border-transparent
-                            ${t.id === highlightedTxId
+                          className={`flex items-center justify-between rounded-md px-2 py-1.5 border border-transparent ${
+                            t.id === highlightedTxId
                               ? "bg-emerald-900/40 border-emerald-500/60"
-                              : "hover:bg-slate-800/60 border-slate-800/80"}
-                            transition-colors
-                          `}
+                              : "hover:bg-slate-800/60 border-slate-800/80"
+                          } transition-colors`}
                         >
                           <div>
                             <div className="font-medium">
@@ -1485,7 +1641,7 @@ useEffect(() => {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-1 ml-2">
+                          <div className="flex items-center gap-1 ml-2 no-print">
                             <button
                               type="button"
                               onClick={() => startEdit(t)}
@@ -1519,42 +1675,37 @@ useEffect(() => {
                     No transactions yet in the last {windowDays} days.
                   </p>
                 ) : (
-                 <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
-                {transactions.map((t) => (
-                  <li
-                    key={t.id}
-                    className={`
-                      flex items-center justify-between rounded-md px-2 py-1.5
-                      border border-transparent
-                      ${t.id === highlightedTxId
-                        ? "bg-emerald-900/40 border-emerald-500/60"
-                        : "hover:bg-slate-800/60 border-slate-800/80"}
-                      transition-colors
-                    `}
-                  >
-                    <div>
-                      <div className="font-medium">
-                        {t.type === "income" ? "+" : "-"}
-                        {formatCurrency(Number(t.amount))}
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        {t.category} • {formatDate(t.date)}
-                        {t.description ? ` • ${t.description}` : ""}
-                      </div>
-                    </div>
+                  <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
+                    {transactions.map((t) => (
+                      <li
+                        key={t.id}
+                        className={`flex items-center justify-between rounded-md px-2 py-1.5 border border-transparent ${
+                          t.id === highlightedTxId
+                            ? "bg-emerald-900/40 border-emerald-500/60"
+                            : "hover:bg-slate-800/60 border-slate-800/80"
+                        } transition-colors`}
+                      >
+                        <div>
+                          <div className="font-medium">
+                            {t.type === "income" ? "+" : "-"}
+                            {formatCurrency(Number(t.amount))}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            {t.category} • {formatDate(t.date)}
+                            {t.description ? ` • ${t.description}` : ""}
+                          </div>
+                        </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteTransaction(t.id)}
-                      className="ml-2 px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20 transition-colors"
-                    >
-                      Delete
-                    </button>
-                  </li>
-                ))}
-              </ul>
-
-
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTransaction(t.id)}
+                          className="no-print ml-2 px-2 py-1 rounded-md border border-red-500/70 text-[10px] text-red-300 hover:bg-red-500/20 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
             </div>
@@ -1880,8 +2031,166 @@ useEffect(() => {
               </div>
             </div>
           </div>
-        </aside>
-      </div>
-    </main>
-  );
+          </aside>  {/* END RIGHT SIDEBAR */}
+        </div>   {/* close flex wrapper */}
+        
+          
+        {/* ============= PRINT-ONLY REPORT ============= */}
+      <div className="only-print p-8 print-text-sm">
+        <h1 className="text-lg font-semibold mb-1">FlowTrack Snapshot</h1>
+        <p className="mb-4">
+          Period: {periodLabel} • Generated on {formatDate(periodStart)}
+        </p>
+
+        {/* SUMMARY CARD (PRINT STYLE) */}
+          <section className="print-card p-3 mb-4">
+            <h2 className="font-semibold mb-2">Summary</h2>
+            <ul className="list-disc list-inside space-y-1">
+              <li>Income: {formatCurrency(income)}</li>
+              <li>Expenses: {formatCurrency(expenses)}</li>
+              <li>
+                Net:{" "}
+                <span className={net >= 0 ? "text-emerald-600 font-semibold" : "text-red-600 font-semibold"}>
+                  {formatCurrency(net)}
+                </span>
+              </li>
+              {savingsRate !== null && (
+                <li>Savings rate: {savingsRate}% of income kept after expenses</li>
+              )}
+            </ul>
+          </section>
+
+
+          {/* ===== TOP EXPENSE CATEGORIES ===== */}
+          <section className="print-card p-3 mb-4">
+            <h2 className="font-semibold mb-2">Top expense categories</h2>
+            <table className="w-full text-[11px] border-collapse">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-1">Category</th>
+                  <th className="text-right py-1">Spent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topCategories.map(([catName, amount]) => (
+                  <tr key={catName} className="border-b last:border-0">
+                    <td className="py-1">{catName}</td>
+                    <td className="py-1 text-right">{formatCurrency(amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+
+
+          {/* ==== FULL CATEGORY SPENDING TABLE (REPLACEMENT YOU ASKED FOR) ==== */}
+          <section className="print-card p-3 mb-4">
+            <h2 className="font-semibold mb-2">Categories</h2>
+            <p className="text-[11px] mb-2">Spend total calculated for the last {windowDays} days.</p>
+
+            <table className="w-full text-[11px] border-collapse">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-1">Category</th>
+                  <th className="text-left py-1">Type</th>
+                  <th className="text-right py-1">Spent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categories.map((cat) => {
+                  const spent = transactions
+                    .filter((t) => t.category === cat.name && t.type === "expense")
+                    .reduce((acc, t) => acc + t.amount, 0);
+
+                  return (
+                    <tr key={cat.name} className="border-b last:border-0">
+                      <td className="py-1">{cat.name}</td>
+                      <td className="py-1">{cat.type === "income" ? "Income" : "Expense"}</td>
+                      <td className="py-1 text-right">{spent > 0 ? formatCurrency(spent) : "-"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </section>
+
+
+        {/* OPTIONAL: BUDGET STATUS (SHORT) */}
+        <section className="print-card p-3">
+          <h2 className="font-semibold mb-2">Budgets overview</h2>
+          <p className="mb-2">
+            Showing only categories that have a budget set.
+          </p>
+          <table className="w-full border-collapse">
+            <thead>
+              <tr>
+                <th className="border-b border-gray-300 text-left py-1 pr-2">
+                  Category
+                </th>
+                <th className="border-b border-gray-300 text-right py-1 pr-2">
+                  Spent
+                </th>
+                <th className="border-b border-gray-300 text-right py-1">
+                  Budget
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {categories
+                .filter((cat) => (categoryBudgets[cat.name] ?? 0) > 0)
+                .map((cat) => {
+                  const budget = categoryBudgets[cat.name] ?? 0;
+                  const spent = expenseByCategory[cat.name] ?? 0;
+                  return (
+                    <tr key={cat.name}>
+                      <td className="py-1 pr-2 border-b border-gray-200">
+                        {cat.name}
+                      </td>
+                      <td className="py-1 text-right border-b border-gray-200">
+                        {formatCurrency(spent)}
+                      </td>
+                      <td className="py-1 text-right border-b border-gray-200">
+                        {formatCurrency(budget)}
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+           </table>
+  </section>
+
+      {/* ALL CATEGORIES (PRINT STYLE) */}
+      <section className="print-card p-3 mb-4">
+        <h2 className="font-semibold mb-2">Categories</h2>
+        <p className="mb-2 text-[11px]">
+          All categories currently available in your FlowTrack workspace.
+        </p>
+
+        <table className="w-full text-[11px] border-collapse">
+          <thead>
+            <tr className="border-b">
+              <th className="py-1 text-left font-semibold">Category</th>
+              <th className="py-1 text-left font-semibold">Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            {categories.map((cat) => (
+              <tr key={cat.name} className="border-b last:border-b-0">
+                <td className="py-1">{cat.name}</td>
+                <td className="py-1">
+                  {cat.type === "income" ? "Income" : "Expense"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+
+</div>
+
+{/* =========== END PRINT-ONLY REPORT =========== */}
+
+</main>
+);
 }
