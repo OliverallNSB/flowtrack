@@ -20,9 +20,14 @@ type Transaction = {
 };
 
 type Category = {
+  id?: string;          // from Supabase
+  user_id?: string;     // from Supabase
+  sort_index?: number;  // from Supabase
   name: string;
   type: TransactionType;
 };
+
+
 
 // ---- DEFAULTS & STORAGE KEYS ----
 
@@ -38,10 +43,13 @@ const DEFAULT_CATEGORIES: Category[] = [
   { name: "Side Income", type: "income" },
 ];
 
+
+
 const DEFAULT_CATEGORY_BUDGETS: Record<string, number> = {};
 
 const CATEGORIES_STORAGE_KEY = "ft_categories_v1";
 const BUDGETS_STORAGE_KEY = "ft_category_budgets_v1";
+
 
 // ---- HELPERS ----
 
@@ -155,7 +163,6 @@ export default function DashboardPage() {
   const [categoryBudgets, setCategoryBudgets] =
     useState<Record<string, number>>(DEFAULT_CATEGORY_BUDGETS);
 
-// ---- REPORT / PDF RANGE ----
 
 // ---- REPORT / PDF RANGE ----
 
@@ -409,6 +416,45 @@ async function handleLogout() {
     setNewCategoryName("");
     setNewCategoryType("expense");
   }
+
+        async function saveCategoryOrder(nextCats: Category[]) {
+        if (!user) return;
+
+        const updates = nextCats.map((c, idx) => ({
+          id: c.id,
+          user_id: user.id,
+          sort_index: idx + 1,
+        }));
+
+        const { error } = await supabase
+          .from("categories")
+          .upsert(updates, { onConflict: "id" });
+
+        if (error) {
+          console.error("saveCategoryOrder error:", error);
+        }
+        }
+
+
+        function moveCategoryToTop(categoryName: string) {
+          setCategories((prev) => {
+            const idx = prev.findIndex((c) => c.name === categoryName);
+            if (idx <= 0) return prev;
+
+            const next = [...prev];
+            const [picked] = next.splice(idx, 1);
+            next.unshift(picked);
+
+            // persist order
+            saveCategoryOrder(next);
+
+            return next;
+          });
+        }
+
+
+
+
 
 async function handleAddCategoryEntry(
   e: FormEvent,
@@ -832,12 +878,14 @@ useEffect(() => {
 
     setErrorMessage(null);
 
-    const { data, error } = await supabase
-      .from("categories")
-      .select("*")
-      .eq("user_id", userId)
-      .order("name", { ascending: true });   // ✅ order by existing "name" column
+  const { data, error } = await supabase
+  .from("categories")
+  .select("*")
+  .eq("user_id", userId)
+  .order("sort_index", { ascending: true })
+  .order("name", { ascending: true });
 
+  
 
     if (error) {
       console.error("Error loading categories:", error);
