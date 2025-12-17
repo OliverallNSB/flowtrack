@@ -33,6 +33,7 @@ type Category = {
 
 const DEFAULT_CATEGORIES: Category[] = [
   { name: "Rent / Mortgage", type: "expense" },
+  { name: "Side Income", type: "income" },
   { name: "Groceries", type: "expense" },
   { name: "Dining Out", type: "expense" },
   { name: "Transportation", type: "expense" },
@@ -40,7 +41,7 @@ const DEFAULT_CATEGORIES: Category[] = [
   { name: "Debt Payments", type: "expense" },
   { name: "Subscriptions", type: "expense" },
   { name: "Salary / Wages", type: "income" },
-  { name: "Side Income", type: "income" },
+  
 ];
 
 
@@ -404,101 +405,103 @@ async function handleLogout() {
 
 
   // ---- CATEGORY & ENTRY HANDLERS (LEFT BAR + CENTER) ----
-  function handleAddCategory(e: FormEvent) {
-    e.preventDefault();
-    const name = newCategoryName.trim();
-    if (!name) return;
-    if (categories.some((c) => c.name === name)) {
-      setNewCategoryName("");
-      return;
-    }
-    setCategories((prev) => [...prev, { name, type: newCategoryType }]);
+  async function handleAddCategory(e: FormEvent) {
+  e.preventDefault();
+
+  const name = newCategoryName.trim();
+  if (!name || !userId) return;
+
+  // prevent duplicates in UI
+  if (categories.some((c) => c.name === name)) {
     setNewCategoryName("");
-    setNewCategoryType("expense");
+    return;
   }
 
-        async function saveCategoryOrder(nextCats: Category[]) {
-        if (!user) return;
+  // determine next sort index (append to bottom)
+  const nextIndex =
+    Math.max(...categories.map((c) => c.sort_index ?? 0), 0) + 1;
 
-        const updates = nextCats.map((c, idx) => ({
-          id: c.id,
-          user_id: user.id,
-          sort_index: idx + 1,
-        }));
+  // INSERT into Supabase
+  const { data, error } = await supabase
+    .from("categories")
+    .insert({
+      user_id: userId,
+      name,
+      type: newCategoryType,
+      sort_index: nextIndex,
+    })
+    .select()
+    .single();
 
-        const { error } = await supabase
-          .from("categories")
-          .upsert(updates, { onConflict: "id" });
+  if (error) {
+    console.error("Add category error:", error);
+    setErrorMessage(error.message);
+    return;
+  }
 
-        if (error) {
-          console.error("saveCategoryOrder error:", error);
-        }
-        }
+  // Update React state with REAL DB row (includes id)
+  setCategories((prev) => [...prev, data]);
 
+  // Reset UI
+  setNewCategoryName("");
+  setNewCategoryType("expense");
+}
 
-        function moveCategoryToTop(categoryName: string) {
-          setCategories((prev) => {
-            const idx = prev.findIndex((c) => c.name === categoryName);
-            if (idx <= 0) return prev;
+async function saveCategoryOrder(ordered: Category[]) {
+  if (!userId) return;
 
-            const next = [...prev];
-            const [picked] = next.splice(idx, 1);
-            next.unshift(picked);
+  const orderNames = ordered.map((c) => c.name);
 
-            // persist order
-            saveCategoryOrder(next);
+  const { error } = await supabase
+    .from("profiles")
+    .upsert(
+      { id: userId, category_order: orderNames },
+      { onConflict: "id" }
+    );
 
-            return next;
-          });
-        }
+  if (error) console.error("saveCategoryOrder error:", error.message);
+}
 
-
-
-
-
-async function handleAddCategoryEntry(
-  e: FormEvent,
-  categoryName: string
-) {
+async function handleAddCategoryEntry(e: FormEvent, categoryName: string) {
   e.preventDefault();
   setErrorMessage(null);
 
-  // Must have a logged-in user
   if (!userId) {
     setErrorMessage("You must be logged in to add entries.");
     return;
   }
 
-  // Category must exist
   const cat = categories.find((c) => c.name === categoryName);
   if (!cat) {
     setErrorMessage("Category not found.");
     return;
   }
 
-  // Form validation
   if (!formAmount || !formDate) {
     setErrorMessage("Please fill amount and date.");
     return;
   }
 
   const amountNumber = Number(formAmount);
-  if (Number.isNaN(amountNumber) || amountNumber <= 0) {
+  if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
     setErrorMessage("Amount must be a positive number.");
     return;
   }
 
-  // Validate date inside window days
-  const chosen = new Date(formDate);
-  if (chosen < new Date(periodStart) || chosen > today) {
+  // Compare dates safely (ignore time)
+  const chosen = new Date(formDate + "T00:00:00");
+  const start = new Date(String(periodStart).slice(0, 10) + "T00:00:00");
+  const end = new Date();
+  end.setHours(0, 0, 0, 0);
+
+  if (chosen < start || chosen > end) {
     setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
     return;
   }
 
   setSaving(true);
 
-  // ---- INSERT INTO SUPABASE ----
-  const { error: insertError } = await supabase
+  const { data: inserted, error: insertError } = await supabase
     .from("transactions")
     .insert({
       user_id: userId,
@@ -506,8 +509,10 @@ async function handleAddCategoryEntry(
       amount: amountNumber,
       date: formDate,
       category: categoryName,
-      description: formDescription || null,
-    });
+      description: formDescription?.trim() ? formDescription.trim() : null,
+    })
+    .select("*")
+    .single();
 
   if (insertError) {
     setErrorMessage(insertError.message);
@@ -515,33 +520,19 @@ async function handleAddCategoryEntry(
     return;
   }
 
-  // ---- RELOAD TRANSACTIONS ----
-  const { data: txRows, error: txError } = await supabase
-    .from("transactions")
-    .select("*")
-    .eq("user_id", userId)
-    .gte("date", periodStart)
-    .order("date", { ascending: false })
-    .order("created_at", { ascending: false });
-
-  if (txError) {
-    setErrorMessage(txError.message);
-  } else {
-    setTransactions((txRows ?? []) as Transaction[]);
+  // Update UI without reloading everything
+  if (inserted) {
+    setTransactions((prev) => [inserted as Transaction, ...prev]);
   }
 
-  // Reset UI
   setSaving(false);
   setFormAmount("");
   setFormDescription("");
   setExpandedCategory(null);
 }
 
-    function handlePrintReport() {
-    if (typeof window !== "undefined") {
-          window.print();
-        }
-    }
+
+
   // ---- QUICK ADD ----
   async function handleQuickAdd(e: FormEvent) {
     e.preventDefault();
@@ -780,30 +771,73 @@ async function handleAddCategoryEntry(
     }
   }
 
-  function handleDeleteCategory(name: string) {
-    const ok = window.confirm(
-      `Delete category "${name}"? Transactions stay in history.`
+async function handleDeleteCategory(name: string) {
+  const ok = window.confirm(
+    `Delete category "${name}"? Transactions stay in history.`
+  );
+  if (!ok) return;
+
+  if (!userId) {
+    setErrorMessage("You must be logged in.");
+    return;
+  }
+
+  // Find the row so we can delete by id (best + safest)
+  const cat = categories.find((c) => c.name === name);
+
+  if (!cat?.id) {
+    setErrorMessage(
+      "Category id not found. This usually means categories were not loaded from DB with id."
     );
-    if (!ok) return;
-
-    setCategories((prev) => prev.filter((c) => c.name !== name));
-    if (selectedCategory === name) setSelectedCategory(null);
-    if (expandedCategory === name) setExpandedCategory(null);
+    return;
   }
 
-  function moveCategory(name: string, direction: "up" | "down") {
-    setCategories((prev) => {
-      const index = prev.findIndex((c) => c.name === name);
-      if (index === -1) return prev;
-      const newIndex = direction === "up" ? index - 1 : index + 1;
-      if (newIndex < 0 || newIndex >= prev.length) return prev;
+  setErrorMessage(null);
 
-      const copy = [...prev];
-      const [item] = copy.splice(index, 1);
-      copy.splice(newIndex, 0, item);
-      return copy;
-    });
+  // 1) Delete from Supabase (source of truth)
+  const { error } = await supabase
+    .from("categories")
+    .delete()
+    .eq("id", cat.id)
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("Error deleting category:", error);
+    setErrorMessage(error.message);
+    return;
   }
+
+  // 2) Update UI state
+  const next = categories.filter((c) => c.id !== cat.id);
+  setCategories(next);
+
+  if (selectedCategory === name) setSelectedCategory(null);
+  if (expandedCategory === name) setExpandedCategory(null);
+
+  // 3) Re-save order (optional but recommended)
+  saveCategoryOrder(next);
+}
+
+
+ function moveCategory(name: string, direction: "up" | "down") {
+  setCategories((prev) => {
+    const index = prev.findIndex((c) => c.name === name);
+    if (index === -1) return prev;
+
+    const newIndex = direction === "up" ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= prev.length) return prev;
+
+    const copy = [...prev];
+    const [item] = copy.splice(index, 1);
+    copy.splice(newIndex, 0, item);
+
+    // ✅ persist order to Supabase
+    saveCategoryOrder(copy);
+
+    return copy;
+  });
+}
+
 
   
   // ---- DEFAULT DATES & QUICK CATEGORY ----
@@ -873,49 +907,57 @@ useEffect(() => {
   // Capture a safe, stable user id
   const userId = user.id;
 
-  async function loadCategories() {
-    if (!userId) return;
+async function loadCategories() {
+  if (!userId) return;
 
-    setErrorMessage(null);
+  // 1) get saved order from profile
+  const { data: profile, error: profileErr } = await supabase
+    .from("profiles")
+    .select("category_order")
+    .eq("id", userId)
+    .single();
 
-  const { data, error } = await supabase
-  .from("categories")
-  .select("*")
-  .eq("user_id", userId)
-  .order("sort_index", { ascending: true })
-  .order("name", { ascending: true });
+  if (profileErr) console.error("load profile order error:", profileErr.message);
 
-  
+  const savedOrder = (profile?.category_order as string[] | null) ?? null;
 
-    if (error) {
-      console.error("Error loading categories:", error);
-      setErrorMessage(error.message);
-      return;
-    }
+  // 2) get categories list
+  const { data: cats, error: catsErr } = await supabase
+    .from("categories")
+    .select("name,type")
+    .eq("user_id", userId);
 
-    let loadedCats;
-
-    // If no categories in DB → use your default template
-    if (!data || data.length === 0) {
-      // ⚠️ IMPORTANT: replace DEFAULT_CATEGORIES with your actual constant
-      loadedCats = DEFAULT_CATEGORIES;
-    } else {
-      loadedCats = data.map((row) => ({
-        id: row.id,
-        name: row.name,
-        type: row.type,
-        budget: row.budget ?? 0,
-      }));
-    }
-
-    setCategories(loadedCats);
-    setCategoriesLoaded(true);
+  if (catsErr) {
+    console.error("load categories error:", catsErr.message);
+    return;
   }
+
+  const normalized: Category[] = (cats ?? []).map((c: any) => ({
+    name: c.name,
+    type: c.type,
+  }));
+
+  // 3) apply saved order BEFORE setting state
+  setCategories(applySavedOrder(normalized, savedOrder));
+  setCategoriesLoaded(true);
+}
+
+function applySavedOrder(list: Category[], savedOrder: string[] | null) {
+  if (!savedOrder || savedOrder.length === 0) return list;
+
+  const pos = new Map(savedOrder.map((name, i) => [name, i]));
+
+  return [...list].sort((a, b) => {
+    const ai = pos.has(a.name) ? (pos.get(a.name) as number) : 999999;
+    const bi = pos.has(b.name) ? (pos.get(b.name) as number) : 999999;
+    if (ai !== bi) return ai - bi;
+    return a.name.localeCompare(b.name); // stable fallback
+  });
+}
+
 
   loadCategories();
 }, [authLoading, user]);
-
-
 
   // ---- DERIVED VALUES ----
   const { income, expenses, net } = summarize(transactions);
