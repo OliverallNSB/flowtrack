@@ -279,7 +279,7 @@ async function handleApplyCustomRange() {
 }
 
 function handleResetRange() {
-  // Return to the normal mode (Last 30 days, 60 days, etc.)
+  // Return to the normal mode (Last ${windowDays}, 60 days, etc.)
   setReportRangeMode("lastNDays");
 
   // Clear custom inputs
@@ -812,6 +812,7 @@ async function handleDeleteCategory(name: string) {
   setCategories(next);
 
   if (selectedCategory === name) setSelectedCategory(null);
+  setErrorMessage(null);
   if (expandedCategory === name) setExpandedCategory(null);
 
   // 3) Re-save order (optional but recommended)
@@ -1334,7 +1335,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
             <p className="mt-1 text-emerald-400">
               {isPro
                 ? "Pro: tracking the last 90 days. Reports coming soon."
-                : "Free: tracking the last 30 days. Upgrade to Pro for 90 days & reports."}
+                : "Free: tracking the last ${windowDays} days. Upgrade to Pro for 90 days & reports."}
             </p>
           </div>
         </aside>
