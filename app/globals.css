@@ -87,3 +87,119 @@ body {
     background: #ffffff !important;
   }
 }
+
+/* hide scrollbar but keep scrolling */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE/Edge */
+  scrollbar-width: none;    /* Firefox */
+}
+/* Hide scrollbar but keep scrolling */
+.no-scrollbar {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* IE / Edge */
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;                  /* Chrome / Safari */
+}
+
+/* Hide scrollbar but keep scroll */
+.no-scrollbar::-webkit-scrollbar {
+  width: 0px;
+  height: 0px;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+@media print {
+  body {
+    background: white !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-page {
+    padding: 24px !important;
+    color: #0f172a !important; /* slate-900-ish */
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  }
+
+  .print-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 10px;
+  }
+
+  .print-title {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+  }
+
+  .print-subtitle {
+    font-size: 11px;
+    color: #475569; /* slate-600 */
+  }
+
+  .print-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin: 14px 0 16px;
+  }
+
+  .print-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px;
+  }
+
+  .print-card-label {
+    font-size: 11px;
+    color: #64748b; /* slate-500 */
+    margin-bottom: 6px;
+  }
+
+  .print-card-value {
+    font-size: 18px;
+    font-weight: 800;
+  }
+
+  .print-section-title {
+    font-size: 12px;
+    font-weight: 800;
+    margin: 14px 0 8px;
+  }
+
+  .print-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+
+  .print-table th {
+    text-align: left;
+    padding: 8px 6px;
+    border-bottom: 1px solid #e2e8f0;
+    color: #475569;
+    font-weight: 700;
+  }
+
+  .print-table td {
+    padding: 7px 6px;
+    border-bottom: 1px solid #f1f5f9;
+  }
+
+  .print-right {
+    text-align: right;
+  }
+}

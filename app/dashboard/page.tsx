@@ -27,10 +27,6 @@ type Category = {
   type: TransactionType;
 };
 
-
-
-
-
 // ---- DEFAULTS & STORAGE KEYS ----
 
 const DEFAULT_CATEGORIES: Category[] = [
@@ -46,16 +42,11 @@ const DEFAULT_CATEGORIES: Category[] = [
   
 ];
 
-
-
 const DEFAULT_CATEGORY_BUDGETS: Record<string, number> = {};
-
 const CATEGORIES_STORAGE_KEY = "ft_categories_v1";
 const BUDGETS_STORAGE_KEY = "ft_category_budgets_v1";
 
-
 // ---- HELPERS ----
-
 function summarize(transactions: Transaction[]) {
   const income = transactions
     .filter((t) => t.type === "income")
@@ -76,11 +67,43 @@ function displayDate(v: string) {
   return v; // otherwise print as-is
 }
 
-function formatDate(dateStr: string) {
-  const d = new Date(dateStr);
+function toLocalISODate(d: Date) {
+  const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
-  const yyyy = d.getFullYear();
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatShortDate(iso: string) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, (m ?? 1) - 1, d ?? 1);
+  return dt.toLocaleDateString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
+function getActiveRangeLabel(
+  usingCustomRange: boolean,
+  periodStart: string,
+  periodEnd: string,
+  windowDays: number
+) {
+  if (usingCustomRange) {
+    return `Custom: ${formatShortDate(periodStart)} → ${formatShortDate(periodEnd)}`;
+  }
+  return `Last ${windowDays} days`;
+}
+
+function formatDate(dateStr: string) {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, (m ?? 1) - 1, d ?? 1); // LOCAL date (no UTC shift)
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const yyyy = dt.getFullYear();
   return `${mm}/${dd}/${yyyy}`;
 }
 
@@ -105,14 +128,15 @@ function handlePrintReport() {
   // For now just print the whole page
   window.print();
 }
- 
-
 
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
-
+  
   const categoryListRef = useRef<HTMLUListElement | null>(null);
+  const incomeScrollRef = useRef<HTMLDivElement | null>(null);
+  const expenseScrollRef = useRef<HTMLDivElement | null>(null);
+
   const [profile, setProfile] = useState<any>(null);
   
    // normalize plan once
@@ -184,32 +208,48 @@ type ReportRangeMode = "thisMonth" | "lastMonth" | "lastNDays" | "current" | "cu
 const [reportRangeMode, setReportRangeMode] = useState<ReportRangeMode>("lastNDays");
 
 // for the custom date range (stored as date strings "YYYY-MM-DD")
+const [rangeMode, setRangeMode] = useState<"preset" | "custom">("preset");
+
 const [customStart, setCustomStart] = useState<string>("");
 const [customEnd, setCustomEnd] = useState<string>("");
 
+const [appliedStart, setAppliedStart] = useState<string | null>(null);
+const [appliedEnd, setAppliedEnd] = useState<string | null>(null);
+
 // are we using the custom range right now?
-const usingCustomRange =
-  reportRangeMode === "custom" && !!customStart && !!customEnd;
+
 
 // base rolling window (same as dashboard view)
 const today = new Date();
-const todayStr = today.toISOString().slice(0, 10);
+const todayStr = toLocalISODate(today);
 
 const windowStartDate = new Date(
   today.getFullYear(),
   today.getMonth(),
   today.getDate() - (windowDays - 1)
 );
-const windowStartStr = windowStartDate.toISOString().slice(0, 10);
+const windowStartStr = toLocalISODate(windowStartDate);
 
 // unified period start/end used by inputs and reports
-const periodStart = usingCustomRange && customStart ? customStart : windowStartStr;
-const periodEnd = usingCustomRange && customEnd ? customEnd : todayStr;
 
-// label that appears in the summary / PDF header
-const periodLabel = usingCustomRange
-  ? `${formatDate(customStart)} : ${formatDate(customEnd)}`
-  : `Last ${windowDays} days`;
+// unified period start/end used by inputs and reports
+const usingCustomRange =
+  reportRangeMode === "custom" && !!appliedStart && !!appliedEnd;
+
+const periodStart = usingCustomRange ? (appliedStart as string) : windowStartStr;
+const periodEnd = usingCustomRange ? (appliedEnd as string) : todayStr;
+
+// one label used everywhere (UI + PDF header)
+const activeRangeLabel = getActiveRangeLabel(
+  usingCustomRange,
+  periodStart,
+  periodEnd,
+  windowDays
+);
+
+// keep existing name if other code uses periodLabel
+const periodLabel = activeRangeLabel;
+
 
 const [draggingName, setDraggingName] = useState<string | null>(null);
 
@@ -241,7 +281,23 @@ function moveCategoryByDrag(dragName: string, dropName: string, type: "income" |
   });
 }
 
+  function autoScrollOnDrag(e: React.DragEvent, el: HTMLDivElement | null) {
+  if (!el) return;
 
+  e.preventDefault(); // IMPORTANT: allows dragover to keep firing
+
+  const rect = el.getBoundingClientRect();
+  const y = e.clientY;
+
+  const edge = 40;
+  const speed = 12;
+
+  if (y < rect.top + edge) {
+    el.scrollTop -= speed;
+  } else if (y > rect.bottom - edge) {
+    el.scrollTop += speed;
+  }
+}
 
 // ---- PICK WHICH TRANSACTIONS GO INTO THE PDF REPORT ----
 
@@ -322,12 +378,18 @@ async function handleApplyCustomRange() {
     return;
   }
 
-  if (customStart > customEnd) {
-    alert("Start date must be before end date.");
-    return;
-  }
+  // auto-swap if user picked backwards
+  const start = customStart <= customEnd ? customStart : customEnd;
+  const end = customStart <= customEnd ? customEnd : customStart;
 
-  // Switch the report mode to use the custom range.
+  // OPTIONAL (recommended): clamp to plan window so Free can’t bypass
+  // start must be >= windowStartStr, end must be <= todayStr
+  const clampedStart = start < windowStartStr ? windowStartStr : start;
+  const clampedEnd = end > todayStr ? todayStr : end;
+
+  setAppliedStart(clampedStart);
+  setAppliedEnd(clampedEnd);
+  setRangeMode("custom");
   setReportRangeMode("custom");
 }
 
@@ -361,26 +423,17 @@ const effectiveEndDate =
 // ---- LOAD TRANSACTIONS FROM SUPABASE ----
   useEffect(() => {
   async function loadTransactions() {
-    if (authLoading) return;
-
-    if (!user) {
-      router.push("/login");
-      return;
-    }
+    if (authLoading || !user) return;
 
     setLoading(true);
     setErrorMessage(null);
-
-    // store for other parts of the dashboard
-    setUserEmail(user.email ?? null);
-    setUserId(user.id);
 
     const { data, error } = await supabase
       .from("transactions")
       .select("*")
       .eq("user_id", user.id)
-      .gte("date", effectiveStartDate)
-      .lte("date", effectiveEndDate)
+      .gte("date", periodStart)
+      .lte("date", periodEnd)
       .order("date", { ascending: false });
 
     if (error) {
@@ -395,15 +448,8 @@ const effectiveEndDate =
   }
 
   loadTransactions();
-}, [
-  authLoading,
-  user,
-  windowStartStr,
-  reportRangeMode,
-  customStart,
-  customEnd,
-  router,
-]);
+}, [authLoading, user, periodStart, periodEnd]);
+
 
 //INSERT VARIABLE HERE?// const effectiveStartdate....
 
@@ -414,7 +460,6 @@ async function handleLogout() {
   await supabase.auth.signOut();
   router.push("/login");
 }
-
 
   // ---- CATEGORY & ENTRY HANDLERS (LEFT BAR + CENTER) ----
   async function handleAddCategory(e: FormEvent) {
@@ -857,8 +902,6 @@ function moveCategory(name: string, direction: "up" | "down") {
   });
 }
 
-
-  
   // ---- DEFAULT DATES & QUICK CATEGORY ----
   useEffect(() => {
     if (!formDate) setFormDate(todayStr);
@@ -1153,7 +1196,17 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                     Income
                   </div>
 
-                  <div className="no-scrollbar max-h-[28vh] overflow-y-auto p-2 space-y-2">
+                    <div
+
+
+                    ref={incomeScrollRef}
+                    className="no-scrollbar max-h-[21vh] overflow-y-auto p-2 space-y-2"
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      autoScrollOnDrag(e, incomeScrollRef.current);
+                    }}
+                    >
+                                 
                     {categories
                       .filter((c) => c.type === "income")
                       .map((cat) => {
@@ -1177,15 +1230,23 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                               e.dataTransfer.effectAllowed = "move";
                             }}
                             onDragEnd={() => setDraggingName(null)}
-                            onDragOver={(e) => e.preventDefault()}
+                            
                             onDrop={(e) => {
                               e.preventDefault();
                               if (!draggingName) return;
                               moveCategoryByDrag(draggingName, cat.name, "income");
+                               setDraggingName(null);
                             }}
+
+
+                            onDragEnter={(e) => e.preventDefault()}
+                            onDragOver={(e) => e.preventDefault()}
+
+
                             className={`group w-full flex items-center justify-between px-3 py-1.5 text-[11px] rounded-t-lg cursor-move ${
                               isSelected ? "text-emerald-200" : "text-slate-200 hover:bg-slate-800"
                             } ${draggingName === cat.name ? "opacity-60" : ""}`}
+                            
                             onClick={() => {
                               setSelectedCategory(cat.name);
                               setExpandedCategory(isExpanded ? null : cat.name);
@@ -1298,9 +1359,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                           </div>
                         );
                       })}
-                  
-                  
-                  </div>
+                   </div>
                 </div>
 
                 {/* EXPENSES (bottom 2/3) */}
@@ -1309,8 +1368,15 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                     Expenses
                   </div>
 
-                  <div className="no-scrollbar overflow-y-auto">
-                    {categories
+                    <div
+                      ref={expenseScrollRef}
+                      className="no-scrollbar max-h-[49.5vh] overflow-y-auto p-2 space-y-2"
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        autoScrollOnDrag(e, expenseScrollRef.current);
+                      }}
+                    >
+                      {categories
                       .filter((c) => c.type === "expense")
                       .map((cat) => {
                         const isSelected = selectedCategory === cat.name;
@@ -1322,7 +1388,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                             key={cat.name}
                             className={`rounded-lg border ${
                               isSelected
-                                ? "border-emerald-500 bg-emerald-600/10"
+                                ? "border-white-500 bg-red-600/10"
                                 : "border-slate-800 bg-slate-900"
                             }`}
                           >
@@ -1334,20 +1400,24 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                               }}
                               onDragEnd={() => setDraggingName(null)}
                               onDragOver={(e) => e.preventDefault()}
+                              
                               onDrop={(e) => {
                                 e.preventDefault();
                                 if (!draggingName) return;
                                 moveCategoryByDrag(draggingName, cat.name, "expense");
+                                setDraggingName(null);  
                               }}
+                              
                               className={`group w-full flex items-center justify-between px-3 py-1.5 text-[11px] rounded-t-lg cursor-move ${
                                 isSelected ? "text-red-200" : "text-slate-200 hover:bg-slate-800"
                               } ${draggingName === cat.name ? "opacity-60" : ""}`}
+                              
                               onClick={() => {
+                                if (draggingName) return;
                                 setSelectedCategory(cat.name);
                                 setExpandedCategory(isExpanded ? null : cat.name);
                               }}
                             >
-
                               <div className="flex flex-col min-w-0">
                                 <span className="truncate">{cat.name}</span>
                                 <span className={`text-[9px] uppercase tracking-wide ${typeColor}`}>
@@ -1716,9 +1786,15 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
             <div className="grid md:grid-cols-3 gap-4">
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
-                  <h2 className="text-xs font-medium mb-1 text-slate-300">
-                    Income {windowDays}
+                  
+                 <h2 className="text-xs font-medium mb-1 text-slate-300">
+                    Income{" "}
+                    <span className="text-slate-500">
+                      {activeRangeLabel}
+                    </span>
                   </h2>
+ 
+
                   <p className="text-xl font-semibold">
                     {formatCurrency(income)}
                   </p>
@@ -1728,8 +1804,12 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
                   <h2 className="text-xs font-medium mb-1 text-slate-300">
-                    Expenses {windowDays}
-                  </h2>
+                  Expenses{" "}
+                  <span className="text-slate-500">
+                    {activeRangeLabel}
+                  </span>
+                </h2>
+
                   <p className="text-xl font-semibold">
                     {formatCurrency(expenses)}
                   </p>
@@ -1738,9 +1818,14 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
 
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
+                  
                   <h2 className="text-xs font-medium mb-1 text-slate-300">
-                    Net {windowDays}
+                    Net{" "}
+                    <span className="text-slate-500">
+                      {activeRangeLabel}
+                    </span>
                   </h2>
+
                   <p className="text-xl font-semibold">
                     {formatCurrency(net)}
                   </p>
@@ -1767,7 +1852,10 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               {/* CATEGORY ENTRIES CARD */}
               <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-[calc(82vh-6rem)]">
                 <h2 className="text-sm font-medium mb-2">
-                  Category Entries {windowDays}
+                  Category Entries{" "}
+                  <span className="text-slate-500 text-xs">
+                    {activeRangeLabel}
+                  </span>
                 </h2>
 
                 {errorMessage && (
@@ -1787,16 +1875,19 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                     <span className="font-semibold text-slate-200">
                       {selectedCategory}
                     </span>{" "}
-                    for the last {windowDays} days yet.
+                    for this range.
                   </p>
+
                 ) : (
                   <>
                     <p className="text-[11px] text-slate-400">
                       Entries for{" "}
                       <span className="font-semibold text-slate-200">
                         {selectedCategory}
+                      </span>{" "}
+                      <span className="text-slate-500">
+                        ({activeRangeLabel})
                       </span>
-                      :
                     </p>
 
                     {/* CATEGORY TOTAL LINE */}
@@ -1940,13 +2031,18 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               {/* ALL TRANSACTIONS CARD */}
               <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-[calc(82vh-6rem)]">
                 <h2 className="text-sm font-medium mb-3">
-                  All transactions {windowDays}
+                  All transactions{" "}
+                  <span className="text-slate-500 text-xs">
+                    {activeRangeLabel}
+                  </span>
                 </h2>
+
 
                 {transactions.length === 0 ? (
                   <p className="text-xs text-slate-300">
-                    No transactions yet in the last {windowDays} days.
+                    No transactions in this range.
                   </p>
+
                 ) : (
                   <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
                     {transactions.map((t) => (
@@ -2172,7 +2268,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               </div>
 
               <p className="mt-2 text-[10px] text-slate-500">
-                Tip: Start with just 3–5 key categories. Too many budgets =
+                Tip: Start with just 3-5 key categories. Too many budgets =
                 overwhelm.
               </p>
             </div>
@@ -2309,8 +2405,11 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
         
           
         {/* ============= PRINT-ONLY REPORT ============= */}
-        <div className="hidden print:block print-report p-8 text-xs">
-          <h1 className="text-lg font-semibold mb-1">FlowTrack Snapshot</h1>
+        
+        
+      <div className="print-page hidden print:block">
+        <div className="print-report p-8 text-xs">
+           <h1 className="text-lg font-semibold mb-1">FlowTrack Snapshot</h1>
             <p className="mb-4">
                Period: {periodLabel} • Generated on {formatDate(periodStart)}
             </p>
@@ -2331,8 +2430,8 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               )}
             </ul>
           </section>
-
-
+            </div>
+                          
           {/* ===== TOP EXPENSE CATEGORIES ===== */}
           <section className="print-card p-3 mb-4">
             <h2 className="font-semibold mb-2">Top expense categories</h2>
@@ -2358,7 +2457,12 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
           {/* ==== FULL CATEGORY SPENDING TABLE (REPLACEMENT YOU ASKED FOR) ==== */}
           <section className="print-card p-3 mb-4">
             <h2 className="font-semibold mb-2">Categories</h2>
-            <p className="text-[11px] mb-2">Spend total calculated for the last {windowDays} days.</p>
+            <p className="text-[11px] mb-2 text-slate-600">
+                    Range:{" "}
+                    <span className="font-medium">
+                      {activeRangeLabel}
+                    </span>
+            </p>
 
             <table className="w-full text-[11px] border-collapse">
               <thead>
@@ -2429,6 +2533,9 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                 })}
             </tbody>
            </table>
+           <div>
+            
+           </div>
   </section>
 
       {/* ALL CATEGORIES (PRINT STYLE) */}

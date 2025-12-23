@@ -27,8 +27,6 @@ type Category = {
   type: TransactionType;
 };
 
-
-
 // ---- DEFAULTS & STORAGE KEYS ----
 
 const DEFAULT_CATEGORIES: Category[] = [
@@ -44,16 +42,11 @@ const DEFAULT_CATEGORIES: Category[] = [
   
 ];
 
-
-
 const DEFAULT_CATEGORY_BUDGETS: Record<string, number> = {};
-
 const CATEGORIES_STORAGE_KEY = "ft_categories_v1";
 const BUDGETS_STORAGE_KEY = "ft_category_budgets_v1";
 
-
 // ---- HELPERS ----
-
 function summarize(transactions: Transaction[]) {
   const income = transactions
     .filter((t) => t.type === "income")
@@ -74,11 +67,43 @@ function displayDate(v: string) {
   return v; // otherwise print as-is
 }
 
-function formatDate(dateStr: string) {
-  const d = new Date(dateStr);
+function toLocalISODate(d: Date) {
+  const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
-  const yyyy = d.getFullYear();
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatShortDate(iso: string) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, (m ?? 1) - 1, d ?? 1);
+  return dt.toLocaleDateString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
+function getActiveRangeLabel(
+  usingCustomRange: boolean,
+  periodStart: string,
+  periodEnd: string,
+  windowDays: number
+) {
+  if (usingCustomRange) {
+    return `Custom: ${formatShortDate(periodStart)} → ${formatShortDate(periodEnd)}`;
+  }
+  return `Last ${windowDays} days`;
+}
+
+function formatDate(dateStr: string) {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, (m ?? 1) - 1, d ?? 1); // LOCAL date (no UTC shift)
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const yyyy = dt.getFullYear();
   return `${mm}/${dd}/${yyyy}`;
 }
 
@@ -107,12 +132,18 @@ function handlePrintReport() {
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
-
+  
   const categoryListRef = useRef<HTMLUListElement | null>(null);
+  const incomeScrollRef = useRef<HTMLDivElement | null>(null);
+  const expenseScrollRef = useRef<HTMLDivElement | null>(null);
+
   const [profile, setProfile] = useState<any>(null);
-  const isPro = profile?.plan?.trim().toLowerCase() === "pro";
+  
+   // normalize plan once
+  const plan = (profile?.plan ?? "").toString().trim().toLowerCase();
+  const isPro = plan === "pro";
 
-
+  // ISO date string YYYY-MM-DD for Supabase filter
 
   // ---- TIME WINDOW (FREE vs PRO) ----
   const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90] : [7, 14, 30];
@@ -140,6 +171,10 @@ export default function DashboardPage() {
   const [formDate, setFormDate] = useState("");
   const [formDescription, setFormDescription] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // split categories
+  const incomeCategories = categories.filter((c) => c.type === "income");
+  const expenseCategories = categories.filter((c) => c.type === "expense");
 
   // ---- EDIT TRANSACTION (CENTER) ----
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -173,34 +208,108 @@ type ReportRangeMode = "thisMonth" | "lastMonth" | "lastNDays" | "current" | "cu
 const [reportRangeMode, setReportRangeMode] = useState<ReportRangeMode>("lastNDays");
 
 // for the custom date range (stored as date strings "YYYY-MM-DD")
+const [rangeMode, setRangeMode] = useState<"preset" | "custom">("preset");
+
 const [customStart, setCustomStart] = useState<string>("");
 const [customEnd, setCustomEnd] = useState<string>("");
 
+const [appliedStart, setAppliedStart] = useState<string | null>(null);
+const [appliedEnd, setAppliedEnd] = useState<string | null>(null);
+
 // are we using the custom range right now?
-const usingCustomRange =
-  reportRangeMode === "custom" && !!customStart && !!customEnd;
+
 
 // base rolling window (same as dashboard view)
 const today = new Date();
-const todayStr = today.toISOString().slice(0, 10);
+const todayStr = toLocalISODate(today);
 
 const windowStartDate = new Date(
   today.getFullYear(),
   today.getMonth(),
   today.getDate() - (windowDays - 1)
 );
-const windowStartStr = windowStartDate.toISOString().slice(0, 10);
+const windowStartStr = toLocalISODate(windowStartDate);
 
 // unified period start/end used by inputs and reports
-const periodStart = usingCustomRange && customStart ? customStart : windowStartStr;
-const periodEnd = usingCustomRange && customEnd ? customEnd : todayStr;
 
-// label that appears in the summary / PDF header
-const periodLabel = usingCustomRange
-  ? `${formatDate(customStart)} – ${formatDate(customEnd)}`
-  : `Last ${windowDays} days`;
+// unified period start/end used by inputs and reports
+const usingCustomRange =
+  reportRangeMode === "custom" && !!appliedStart && !!appliedEnd;
+
+const periodStart = usingCustomRange ? (appliedStart as string) : windowStartStr;
+const periodEnd = usingCustomRange ? (appliedEnd as string) : todayStr;
+
+// one label used everywhere (UI + PDF header)
+const activeRangeLabel = getActiveRangeLabel(
+  usingCustomRange,
+  periodStart,
+  periodEnd,
+  windowDays
+);
+
+// keep existing name if other code uses periodLabel
+const periodLabel = activeRangeLabel;
+
+
+const [draggingName, setDraggingName] = useState<string | null>(null);
+
+function moveCategoryByDrag(dragName: string, dropName: string, type: "income" | "expense") {
+  if (dragName === dropName) return;
+
+  setCategories((prev) => {
+    // split into: this type + other type
+    const sameType = prev.filter((c) => c.type === type);
+    const otherType = prev.filter((c) => c.type !== type);
+
+    const fromIndex = sameType.findIndex((c) => c.name === dragName);
+    const toIndex = sameType.findIndex((c) => c.name === dropName);
+    if (fromIndex < 0 || toIndex < 0) return prev;
+
+    const copy = [...sameType];
+    const [item] = copy.splice(fromIndex, 1);
+    copy.splice(toIndex, 0, item);
+
+    // recombine in a stable way: income first, expense second (or vice versa)
+    const next =
+      type === "income"
+        ? [...copy, ...otherType]
+        : [...otherType, ...copy];
+
+    // persist order
+    saveCategoryOrder(next);
+    return next;
+  });
+}
+
+  function autoScrollOnDrag(e: React.DragEvent, el: HTMLDivElement | null) {
+  if (!el) return;
+
+  e.preventDefault(); // IMPORTANT: allows dragover to keep firing
+
+  const rect = el.getBoundingClientRect();
+  const y = e.clientY;
+
+  const edge = 40;
+  const speed = 12;
+
+  if (y < rect.top + edge) {
+    el.scrollTop -= speed;
+  } else if (y > rect.bottom - edge) {
+    el.scrollTop += speed;
+  }
+}
 
 // ---- PICK WHICH TRANSACTIONS GO INTO THE PDF REPORT ----
+
+useEffect(() => {
+  setWindowDays((prev) => {
+    // If user upgraded/downgraded, clamp to allowed values
+    const allowed = isPro ? [7, 14, 30, 60, 90] : [7, 14, 30];
+    if (allowed.includes(prev)) return prev; // keep user's choice
+    return isPro ? 90 : 30; // fallback if prev isn't allowed
+  });
+}, [isPro]);
+
 
 function getReportTransactions(all: Transaction[]): Transaction[] {
   // helpers
@@ -269,12 +378,18 @@ async function handleApplyCustomRange() {
     return;
   }
 
-  if (customStart > customEnd) {
-    alert("Start date must be before end date.");
-    return;
-  }
+  // auto-swap if user picked backwards
+  const start = customStart <= customEnd ? customStart : customEnd;
+  const end = customStart <= customEnd ? customEnd : customStart;
 
-  // Switch the report mode to use the custom range.
+  // OPTIONAL (recommended): clamp to plan window so Free can’t bypass
+  // start must be >= windowStartStr, end must be <= todayStr
+  const clampedStart = start < windowStartStr ? windowStartStr : start;
+  const clampedEnd = end > todayStr ? todayStr : end;
+
+  setAppliedStart(clampedStart);
+  setAppliedEnd(clampedEnd);
+  setRangeMode("custom");
   setReportRangeMode("custom");
 }
 
@@ -306,28 +421,19 @@ const effectiveEndDate =
     : todayStr;
 
 // ---- LOAD TRANSACTIONS FROM SUPABASE ----
-useEffect(() => {
+  useEffect(() => {
   async function loadTransactions() {
-    if (authLoading) return;
-
-    if (!user) {
-      router.push("/login");
-      return;
-    }
+    if (authLoading || !user) return;
 
     setLoading(true);
     setErrorMessage(null);
-
-    // store for other parts of the dashboard
-    setUserEmail(user.email ?? null);
-    setUserId(user.id);
 
     const { data, error } = await supabase
       .from("transactions")
       .select("*")
       .eq("user_id", user.id)
-      .gte("date", effectiveStartDate)
-      .lte("date", effectiveEndDate)
+      .gte("date", periodStart)
+      .lte("date", periodEnd)
       .order("date", { ascending: false });
 
     if (error) {
@@ -342,67 +448,18 @@ useEffect(() => {
   }
 
   loadTransactions();
-}, [
-  authLoading,
-  user,
-  windowStartStr,
-  reportRangeMode,
-  customStart,
-  customEnd,
-  router,
-]);
-
-
-
-
+}, [authLoading, user, periodStart, periodEnd]);
 
 
 //INSERT VARIABLE HERE?// const effectiveStartdate....
 
 // ---- LOAD TRANSACTIONS FROM SUPABASE ----
-useEffect(() => {
-  async function loadTransactions() {
-    if (authLoading) return;
-
-    if (!user) {
-      router.push("/login");
-      return;
-    }
-
-    setLoading(true);
-    setErrorMessage(null);
-
-    // store for other parts of the dashboard
-    setUserEmail(user.email ?? null);
-    setUserId(user.id);
-
-    const { data, error } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("user_id", user.id)
-      .gte("date", windowStartStr) // Last 30/60/90/custom start
-      .order("date", { ascending: false });
-
-    if (error) {
-      console.error("Error loading transactions:", error);
-      setErrorMessage(error.message);
-      setLoading(false);
-      return;
-    }
-
-    setTransactions((data ?? []) as Transaction[]);
-    setLoading(false);
-  }
-
-  loadTransactions();
-}, [authLoading, user, windowStartStr, router]);
 
 // ---- LOGOUT ----
 async function handleLogout() {
   await supabase.auth.signOut();
   router.push("/login");
 }
-
 
   // ---- CATEGORY & ENTRY HANDLERS (LEFT BAR + CENTER) ----
   async function handleAddCategory(e: FormEvent) {
@@ -785,42 +842,48 @@ async function handleDeleteCategory(name: string) {
   // Find the row so we can delete by id (best + safest)
   const cat = categories.find((c) => c.name === name);
 
-  if (!cat?.id) {
-    setErrorMessage(
-      "Category id not found. This usually means categories were not loaded from DB with id."
-    );
-    return;
-  }
+if (!cat) {
+  setErrorMessage("Category not found in current list.");
+  return;
+}
+
+setErrorMessage(null);
+
+// If we have id, delete by id (best)
+let del = supabase.from("categories").delete().eq("user_id", userId);
+
+del = cat.id ? del.eq("id", cat.id) : del.eq("name", name); // ✅ fallback
+
+const { error } = await del;
+if (error) {
+  console.error("Error deleting category:", error);
+  setErrorMessage(error.message);
+  return;
+}
 
   setErrorMessage(null);
 
-  // 1) Delete from Supabase (source of truth)
-  const { error } = await supabase
-    .from("categories")
-    .delete()
-    .eq("id", cat.id)
-    .eq("user_id", userId);
+    // 2) Update UI state
+ 
+const next = cat.id
+  ? categories.filter((c) => c.id !== cat.id)
+  : categories.filter((c) => c.name !== name);
 
-  if (error) {
-    console.error("Error deleting category:", error);
-    setErrorMessage(error.message);
-    return;
-  }
-
-  // 2) Update UI state
-  const next = categories.filter((c) => c.id !== cat.id);
   setCategories(next);
 
-  if (selectedCategory === name) setSelectedCategory(null);
-  setErrorMessage(null);
-  if (expandedCategory === name) setExpandedCategory(null);
+  if (selectedCategory === name) {
+  setSelectedCategory(null);
+   // prevent "Category id not found"
+}
+
+  
+  if (expandedCategory === name) setExpandedCategory(null); setErrorMessage(null);
 
   // 3) Re-save order (optional but recommended)
   saveCategoryOrder(next);
 }
 
-
- function moveCategory(name: string, direction: "up" | "down") {
+function moveCategory(name: string, direction: "up" | "down") {
   setCategories((prev) => {
     const index = prev.findIndex((c) => c.name === name);
     if (index === -1) return prev;
@@ -839,8 +902,6 @@ async function handleDeleteCategory(name: string) {
   });
 }
 
-
-  
   // ---- DEFAULT DATES & QUICK CATEGORY ----
   useEffect(() => {
     if (!formDate) setFormDate(todayStr);
@@ -1117,7 +1178,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
         {/* ========================= */}
         {/* LEFT SIDEBAR             */}
         {/* ========================= */}
-        <aside className="w-64 border-r border-slate-800 bg-slate-950/80 flex flex-col">
+        <aside className="w-64 border-r border-slate-800 bg-slate-950/80 flex flex-col h-[calc(100vh-0px)]">
           <div className="px-4 py-4 border-b border-slate-800">
             <h2 className="text-sm font-semibold tracking-wide">FlowTrack</h2>
             <p className="text-[11px] text-slate-400">
@@ -1127,155 +1188,346 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
 
           <div className="flex-1 px-3 py-3 flex flex-col gap-3 text-xs overflow-y-auto">
             {/* CATEGORIES LIST */}
-            <div>
-              <div className="text-slate-400 uppercase text-[10px] px-1 mb-1">
-                Categories
-              </div>
+            {/* CATEGORIES LIST (SPLIT) */}
+              <div className="flex flex-col gap-3 min-h-0">
+                {/* INCOME (top 1/3) */}
+                <div className="border border-slate-800 rounded-xl bg-slate-900/20 overflow-hidden">
+                  <div className="text-slate-400 uppercase text-[10px] px-3 py-2 border-b border-slate-800">
+                    Income
+                  </div>
 
-              <div className="space-y-2">
-                {categories.map((cat) => {
-                  const isSelected = selectedCategory === cat.name;
-                  const isExpanded = expandedCategory === cat.name;
-                  const typeColor =
-                    cat.type === "income"
-                      ? "text-emerald-300"
-                      : "text-red-300";
-
-                  return (
                     <div
-                      key={cat.name}
-                      className={`rounded-lg border ${
-                        isSelected
-                          ? "border-emerald-500 bg-emerald-600/10"
-                          : "border-slate-800 bg-slate-900"
-                      }`}
+
+
+                    ref={incomeScrollRef}
+                    className="no-scrollbar max-h-[21vh] overflow-y-auto p-2 space-y-2"
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      autoScrollOnDrag(e, incomeScrollRef.current);
+                    }}
                     >
-                      <div
-                        className={`group w-full flex items-center justify-between px-3 py-1.5 text-[11px] rounded-t-lg cursor-pointer ${
-                          isSelected
-                            ? "text-emerald-200"
-                            : "text-slate-200 hover:bg-slate-800"
-                        }`}
-                        onClick={() => {
-                          setSelectedCategory(cat.name);
-                          setExpandedCategory(isExpanded ? null : cat.name);
-                        }}
-                      >
-                        <div className="flex flex-col min-w-0">
-                          <span className="truncate">{cat.name}</span>
-                          <span
-                            className={`text-[9px] uppercase tracking-wide ${typeColor}`}
-                          >
-                            {cat.type === "income" ? "Income" : "Expense"}
-                          </span>
-                        </div>
+                                 
+                    {categories
+                      .filter((c) => c.type === "income")
+                      .map((cat) => {
+                        const isSelected = selectedCategory === cat.name;
+                        const isExpanded = expandedCategory === cat.name;
+                        const typeColor = "text-emerald-300";
 
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity no-print">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              moveCategory(cat.name, "up");
+                        return (
+                          <div
+                            key={cat.name}
+                            className={`rounded-lg border ${
+                              isSelected
+                                ? "border-emerald-500 bg-emerald-600/10"
+                                : "border-slate-800 bg-slate-900"
+                            }`}
+                          >
+                            <div
+                              draggable
+                            onDragStart={(e) => {
+                              setDraggingName(cat.name);
+                              e.dataTransfer.effectAllowed = "move";
                             }}
-                            className="text-slate-500 hover:text-slate-200 text-[10px]"
-                            aria-label={`Move ${cat.name} up`}
-                          >
-                            ▲
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              moveCategory(cat.name, "down");
+                            onDragEnd={() => setDraggingName(null)}
+                            
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              if (!draggingName) return;
+                              moveCategoryByDrag(draggingName, cat.name, "income");
+                               setDraggingName(null);
                             }}
-                            className="text-slate-500 hover:text-slate-200 text-[10px]"
-                            aria-label={`Move ${cat.name} down`}
-                          >
-                            ▼
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteCategory(cat.name);
+
+
+                            onDragEnter={(e) => e.preventDefault()}
+                            onDragOver={(e) => e.preventDefault()}
+
+
+                            className={`group w-full flex items-center justify-between px-3 py-1.5 text-[11px] rounded-t-lg cursor-move ${
+                              isSelected ? "text-emerald-200" : "text-slate-200 hover:bg-slate-800"
+                            } ${draggingName === cat.name ? "opacity-60" : ""}`}
+                            
+                            onClick={() => {
+                              setSelectedCategory(cat.name);
+                              setExpandedCategory(isExpanded ? null : cat.name);
                             }}
-                            className="ml-1 text-slate-500 hover:text-red-400 text-[10px]"
-                            aria-label={`Delete category ${cat.name}`}
+                                >
+
+                              <div className="flex flex-col min-w-0">
+                                <span className="truncate">{cat.name}</span>
+                                <span className={`text-[9px] uppercase tracking-wide ${typeColor}`}>
+                                  Income
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity no-print">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    moveCategory(cat.name, "up");
+                                  }}
+                                  className="text-slate-500 hover:text-slate-200 text-[10px]"
+                                  aria-label={`Move ${cat.name} up`}
+                                >
+                                  ▲
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    moveCategory(cat.name, "down");
+                                  }}
+                                  className="text-slate-500 hover:text-slate-200 text-[10px]"
+                                  aria-label={`Move ${cat.name} down`}
+                                >
+                                  ▼
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteCategory(cat.name);
+                                  }}
+                                  className="ml-1 text-slate-500 hover:text-red-400 text-[10px]"
+                                  aria-label={`Delete category ${cat.name}`}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+
+                            {isExpanded && (
+                              <form
+                                onSubmit={(e) => handleAddCategoryEntry(e, cat.name)}
+                                className="px-3 pb-3 pt-2 border-t border-slate-800 space-y-2 text-[11px] no-print"
+                              >
+                                <div className="text-[10px] text-slate-400 mb-1">
+                                  Add income entry
+                                </div>
+
+                                <div>
+                                  <label className="block mb-1">Amount</label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={formAmount}
+                                    onChange={(e) => setFormAmount(e.target.value)}
+                                    className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
+                                    placeholder="0.00"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block mb-1">
+                                    Date{" "}
+                                    <span className="text-[10px] text-slate-400">
+                                      (last {windowDays} days)
+                                    </span>
+                                  </label>
+                                  <input
+                                    type="date"
+                                    min={periodStart}
+                                    max={periodEnd}
+                                    value={formDate}
+                                    onChange={(e) => setFormDate(e.target.value)}
+                                    className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block mb-1">Description (optional)</label>
+                                  <input
+                                    type="text"
+                                    value={formDescription}
+                                    onChange={(e) => setFormDescription(e.target.value)}
+                                    className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
+                                    placeholder="Short note..."
+                                  />
+                                </div>
+
+                                <button
+                                  type="submit"
+                                  disabled={saving}
+                                  className="w-full rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed py-1.5 text-[11px] font-medium mt-1"
+                                >
+                                  {saving ? "Saving..." : `Add to "${cat.name}"`}
+                                </button>
+                              </form>
+                            )}
+                          </div>
+                        );
+                      })}
+                   </div>
+                </div>
+
+                {/* EXPENSES (bottom 2/3) */}
+                <div className="flex-1 min-h-0 border border-slate-800 rounded-xl bg-slate-900/20 overflow-hidden">
+                  <div className="text-slate-400 uppercase text-[10px] px-3 py-2 border-b border-slate-800">
+                    Expenses
+                  </div>
+
+                    <div
+                      ref={expenseScrollRef}
+                      className="no-scrollbar max-h-[49.5vh] overflow-y-auto p-2 space-y-2"
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        autoScrollOnDrag(e, expenseScrollRef.current);
+                      }}
+                    >
+                      {categories
+                      .filter((c) => c.type === "expense")
+                      .map((cat) => {
+                        const isSelected = selectedCategory === cat.name;
+                        const isExpanded = expandedCategory === cat.name;
+                        const typeColor = "text-red-300";
+
+                        return (
+                          <div
+                            key={cat.name}
+                            className={`rounded-lg border ${
+                              isSelected
+                                ? "border-white-500 bg-red-600/10"
+                                : "border-slate-800 bg-slate-900"
+                            }`}
                           >
-                            ✕
-                          </button>
-                        </div>
-                      </div>
+                            <div
+                              draggable
+                              onDragStart={(e) => {
+                                setDraggingName(cat.name);
+                                e.dataTransfer.effectAllowed = "move";
+                              }}
+                              onDragEnd={() => setDraggingName(null)}
+                              onDragOver={(e) => e.preventDefault()}
+                              
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                if (!draggingName) return;
+                                moveCategoryByDrag(draggingName, cat.name, "expense");
+                                setDraggingName(null);  
+                              }}
+                              
+                              className={`group w-full flex items-center justify-between px-3 py-1.5 text-[11px] rounded-t-lg cursor-move ${
+                                isSelected ? "text-red-200" : "text-slate-200 hover:bg-slate-800"
+                              } ${draggingName === cat.name ? "opacity-60" : ""}`}
+                              
+                              onClick={() => {
+                                if (draggingName) return;
+                                setSelectedCategory(cat.name);
+                                setExpandedCategory(isExpanded ? null : cat.name);
+                              }}
+                            >
+                              <div className="flex flex-col min-w-0">
+                                <span className="truncate">{cat.name}</span>
+                                <span className={`text-[9px] uppercase tracking-wide ${typeColor}`}>
+                                  Expense
+                                </span>
+                              </div>
 
-                      {isExpanded && (
-                        <form
-                          onSubmit={(e) => handleAddCategoryEntry(e, cat.name)}
-                          className="px-3 pb-3 pt-2 border-t border-slate-800 space-y-2 text-[11px] no-print"
-                        >
-                          <div className="text-[10px] text-slate-400 mb-1">
-                            Add{" "}
-                            {cat.type === "income" ? "income" : "expense"} entry
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity no-print">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    moveCategory(cat.name, "up");
+                                  }}
+                                  className="text-slate-500 hover:text-slate-200 text-[10px]"
+                                  aria-label={`Move ${cat.name} up`}
+                                >
+                                  ▲
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    moveCategory(cat.name, "down");
+                                  }}
+                                  className="text-slate-500 hover:text-slate-200 text-[10px]"
+                                  aria-label={`Move ${cat.name} down`}
+                                >
+                                  ▼
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteCategory(cat.name);
+                                  }}
+                                  className="ml-1 text-slate-500 hover:text-red-400 text-[10px]"
+                                  aria-label={`Delete category ${cat.name}`}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+
+                            {isExpanded && (
+                              <form
+                                onSubmit={(e) => handleAddCategoryEntry(e, cat.name)}
+                                className="px-3 pb-3 pt-2 border-t border-slate-800 space-y-2 text-[11px] no-print"
+                              >
+                                <div className="text-[10px] text-slate-400 mb-1">
+                                  Add expense entry
+                                </div>
+
+                                <div>
+                                  <label className="block mb-1">Amount</label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={formAmount}
+                                    onChange={(e) => setFormAmount(e.target.value)}
+                                    className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
+                                    placeholder="0.00"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block mb-1">
+                                    Date{" "}
+                                    <span className="text-[10px] text-slate-400">
+                                      (last {windowDays} days)
+                                    </span>
+                                  </label>
+                                  <input
+                                    type="date"
+                                    min={periodStart}
+                                    max={periodEnd}
+                                    value={formDate}
+                                    onChange={(e) => setFormDate(e.target.value)}
+                                    className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block mb-1">Description (optional)</label>
+                                  <input
+                                    type="text"
+                                    value={formDescription}
+                                    onChange={(e) => setFormDescription(e.target.value)}
+                                    className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
+                                    placeholder="Short note..."
+                                  />
+                                </div>
+
+                                <button
+                                  type="submit"
+                                  disabled={saving}
+                                  className="w-full rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed py-1.5 text-[11px] font-medium mt-1"
+                                >
+                                  {saving ? "Saving..." : `Add to "${cat.name}"`}
+                                </button>
+                              </form>
+                            )}
                           </div>
-
-                          <div>
-                            <label className="block mb-1">Amount</label>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={formAmount}
-                              onChange={(e) => setFormAmount(e.target.value)}
-                              className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
-                              placeholder="0.00"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block mb-1">
-                              Date{" "}
-                              <span className="text-[10px] text-slate-400">
-                                (last {windowDays} days)
-                              </span>
-                            </label>
-                            <input
-                              type="date"
-                              min={periodStart}
-                              max={periodEnd}
-                              value={formDate}
-                              onChange={(e) => setFormDate(e.target.value)}
-                              className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block mb-1">
-                              Description (optional)
-                            </label>
-                            <input
-                              type="text"
-                              value={formDescription}
-                              onChange={(e) =>
-                                setFormDescription(e.target.value)
-                              }
-                              className="w-full rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5"
-                              placeholder="Short note..."
-                            />
-                          </div>
-
-                          <button
-                            type="submit"
-                            disabled={saving}
-                            className="w-full rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed py-1.5 text-[11px] font-medium mt-1"
-                          >
-                            {saving ? "Saving..." : `Add to "${cat.name}"`}
-                          </button>
-                        </form>
-                      )}
-                    </div>
-                  );
-                })}
+                        );
+                      })}
+                  </div>
+                </div>
               </div>
-            </div>
+
 
             {/* ADD CATEGORY FORM */}
             <form
@@ -1334,7 +1586,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
             </p>
             <p className="mt-1 text-emerald-400">
               {isPro
-                ? "Pro: tracking the last 90 days. Reports coming soon."
+                ? "Pro: tracking the last {windowDays}. Reports coming soon."
                 : "Free: tracking the last ${windowDays} days. Upgrade to Pro for 90 days & reports."}
             </p>
           </div>
@@ -1534,9 +1786,15 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
             <div className="grid md:grid-cols-3 gap-4">
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
-                  <h2 className="text-xs font-medium mb-1 text-slate-300">
-                    Income {windowDays}
+                  
+                 <h2 className="text-xs font-medium mb-1 text-slate-300">
+                    Income{" "}
+                    <span className="text-slate-500">
+                      {activeRangeLabel}
+                    </span>
                   </h2>
+ 
+
                   <p className="text-xl font-semibold">
                     {formatCurrency(income)}
                   </p>
@@ -1546,8 +1804,12 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
                   <h2 className="text-xs font-medium mb-1 text-slate-300">
-                    Expenses {windowDays}
-                  </h2>
+                  Expenses{" "}
+                  <span className="text-slate-500">
+                    {activeRangeLabel}
+                  </span>
+                </h2>
+
                   <p className="text-xl font-semibold">
                     {formatCurrency(expenses)}
                   </p>
@@ -1556,9 +1818,14 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
 
               <div className="bg-slate-900 rounded-xl p-3 border border-slate-800 flex flex-col justify-between">
                 <div>
+                  
                   <h2 className="text-xs font-medium mb-1 text-slate-300">
-                    Net {windowDays}
+                    Net{" "}
+                    <span className="text-slate-500">
+                      {activeRangeLabel}
+                    </span>
                   </h2>
+
                   <p className="text-xl font-semibold">
                     {formatCurrency(net)}
                   </p>
@@ -1585,7 +1852,10 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               {/* CATEGORY ENTRIES CARD */}
               <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-[calc(82vh-6rem)]">
                 <h2 className="text-sm font-medium mb-2">
-                  Category Entries {windowDays}
+                  Category Entries{" "}
+                  <span className="text-slate-500 text-xs">
+                    {activeRangeLabel}
+                  </span>
                 </h2>
 
                 {errorMessage && (
@@ -1605,16 +1875,19 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                     <span className="font-semibold text-slate-200">
                       {selectedCategory}
                     </span>{" "}
-                    for the last {windowDays} days yet.
+                    for this range.
                   </p>
+
                 ) : (
                   <>
                     <p className="text-[11px] text-slate-400">
                       Entries for{" "}
                       <span className="font-semibold text-slate-200">
                         {selectedCategory}
+                      </span>{" "}
+                      <span className="text-slate-500">
+                        ({activeRangeLabel})
                       </span>
-                      :
                     </p>
 
                     {/* CATEGORY TOTAL LINE */}
@@ -1758,13 +2031,18 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               {/* ALL TRANSACTIONS CARD */}
               <div className="bg-slate-900 rounded-xl p-4 border border-slate-800 flex flex-col min-h-0 max-h-[calc(82vh-6rem)]">
                 <h2 className="text-sm font-medium mb-3">
-                  All transactions {windowDays}
+                  All transactions{" "}
+                  <span className="text-slate-500 text-xs">
+                    {activeRangeLabel}
+                  </span>
                 </h2>
+
 
                 {transactions.length === 0 ? (
                   <p className="text-xs text-slate-300">
-                    No transactions yet in the last {windowDays} days.
+                    No transactions in this range.
                   </p>
+
                 ) : (
                   <ul className="text-xs text-slate-200 space-y-2 overflow-auto pr-1 flex-1 transactions-scroll">
                     {transactions.map((t) => (
@@ -1990,7 +2268,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               </div>
 
               <p className="mt-2 text-[10px] text-slate-500">
-                Tip: Start with just 3–5 key categories. Too many budgets =
+                Tip: Start with just 3-5 key categories. Too many budgets =
                 overwhelm.
               </p>
             </div>
@@ -2127,8 +2405,11 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
         
           
         {/* ============= PRINT-ONLY REPORT ============= */}
+        
+        
+      <div className="print-page hidden print:block">
         <div className="print-report p-8 text-xs">
-          <h1 className="text-lg font-semibold mb-1">FlowTrack Snapshot</h1>
+           <h1 className="text-lg font-semibold mb-1">FlowTrack Snapshot</h1>
             <p className="mb-4">
                Period: {periodLabel} • Generated on {formatDate(periodStart)}
             </p>
@@ -2149,8 +2430,8 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               )}
             </ul>
           </section>
-
-
+            </div>
+                          
           {/* ===== TOP EXPENSE CATEGORIES ===== */}
           <section className="print-card p-3 mb-4">
             <h2 className="font-semibold mb-2">Top expense categories</h2>
@@ -2176,7 +2457,12 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
           {/* ==== FULL CATEGORY SPENDING TABLE (REPLACEMENT YOU ASKED FOR) ==== */}
           <section className="print-card p-3 mb-4">
             <h2 className="font-semibold mb-2">Categories</h2>
-            <p className="text-[11px] mb-2">Spend total calculated for the last {windowDays} days.</p>
+            <p className="text-[11px] mb-2 text-slate-600">
+                    Range:{" "}
+                    <span className="font-medium">
+                      {activeRangeLabel}
+                    </span>
+            </p>
 
             <table className="w-full text-[11px] border-collapse">
               <thead>
@@ -2247,6 +2533,9 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                 })}
             </tbody>
            </table>
+           <div>
+            
+           </div>
   </section>
 
       {/* ALL CATEGORIES (PRINT STYLE) */}
