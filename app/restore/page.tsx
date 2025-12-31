@@ -129,6 +129,42 @@ function handlePrintReport() {
   window.print();
 }
 
+function BudgetStatusIcon({ status }: { status: "ok" | "near" | "over" | "none" }) {
+  if (status === "none") return null;
+
+  const common = "inline-block align-[-2px] mr-2";
+  const size = 14;
+
+        if (status === "ok") {
+          return (
+            <svg className={common + " text-emerald-600"} width={size} height={size} viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+              <path d="M7 12l3 3 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          );
+        }
+
+        if (status === "near") {
+          return (
+            <svg className={common + " text-amber-600"} width={size} height={size} viewBox="0 0 24 24" fill="none">
+              <path d="M12 3l10 18H2L12 3z" stroke="currentColor" strokeWidth="2" />
+              <path d="M12 9v5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <circle cx="12" cy="17" r="1" fill="currentColor" />
+            </svg>
+          );
+        }
+
+        // over
+        return (
+          <svg className={common + " text-rose-600"} width={size} height={size} viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+            <path d="M12 7v6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            <circle cx="12" cy="17" r="1" fill="currentColor" />
+          </svg>
+        );
+      }
+
+
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
@@ -146,7 +182,7 @@ export default function DashboardPage() {
   // ISO date string YYYY-MM-DD for Supabase filter
 
   // ---- TIME WINDOW (FREE vs PRO) ----
-  const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90] : [7, 14, 30];
+  const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90, 120] : [7, 14, 30];
   const [windowDays, setWindowDays] = useState<number>(isPro ? 90 : 30);
 
   // ---- USER & DATA STATE ----
@@ -181,8 +217,7 @@ export default function DashboardPage() {
   const [editingAmount, setEditingAmount] = useState<string>("");
   const [editingCategory, setEditingCategory] = useState<string>("");
   const [editingDate, setEditingDate] = useState("");
-  const [editingDescription, setEditingDescription] =
-    useState<string>("");
+  const [editingDescription, setEditingDescription] = useState<string>("");
   const [editingSaving, setEditingSaving] = useState(false);
 
   // ---- QUICK ADD BAR (CENTER TOP) ----
@@ -216,9 +251,9 @@ const [customEnd, setCustomEnd] = useState<string>("");
 const [appliedStart, setAppliedStart] = useState<string | null>(null);
 const [appliedEnd, setAppliedEnd] = useState<string | null>(null);
 
+
+
 // are we using the custom range right now?
-
-
 // base rolling window (same as dashboard view)
 const today = new Date();
 const todayStr = toLocalISODate(today);
@@ -233,11 +268,13 @@ const windowStartStr = toLocalISODate(windowStartDate);
 // unified period start/end used by inputs and reports
 
 // unified period start/end used by inputs and reports
+// unified period start/end used by inputs and reports
 const usingCustomRange =
-  reportRangeMode === "custom" && !!appliedStart && !!appliedEnd;
+  rangeMode === "custom" && !!appliedStart && !!appliedEnd;
 
 const periodStart = usingCustomRange ? (appliedStart as string) : windowStartStr;
 const periodEnd = usingCustomRange ? (appliedEnd as string) : todayStr;
+
 
 // one label used everywhere (UI + PDF header)
 const activeRangeLabel = getActiveRangeLabel(
@@ -384,7 +421,9 @@ async function handleApplyCustomRange() {
 
   // OPTIONAL (recommended): clamp to plan window so Free can’t bypass
   // start must be >= windowStartStr, end must be <= todayStr
-  const clampedStart = start < windowStartStr ? windowStartStr : start;
+  const clampedStart = start < planWindowStartStr ? planWindowStartStr : start;
+
+  
   const clampedEnd = end > todayStr ? todayStr : end;
 
   setAppliedStart(clampedStart);
@@ -392,6 +431,17 @@ async function handleApplyCustomRange() {
   setRangeMode("custom");
   setReportRangeMode("custom");
 }
+
+// plan limit (independent of dropdown)
+const planMaxDays = isPro ? 120 : 30;
+
+const planWindowStartDate = new Date(
+  today.getFullYear(),
+  today.getMonth(),
+  today.getDate() - (planMaxDays - 1)
+);
+const planWindowStartStr = toLocalISODate(planWindowStartDate);
+
 
 function handleResetRange() {
   // Return to the normal mode (Last ${windowDays}, 60 days, etc.)
@@ -1088,18 +1138,31 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
           }
+
           .no-print {
             display: none !important;
           }
+
           .print-page {
-            background: #020617 !important; /* slate-950 */
+            background: #020617 !important;
+            padding: 4px !important; /* slate-950 */
           }
+
           .transactions-scroll,
           .budget-scroll {
             max-height: none !important;
             overflow: visible !important;
           }
+
+          /* Budget status icons — subtle in PDF */
+          .text-emerald-600,
+          .text-amber-600,
+          .text-rose-600 {
+            filter: grayscale(15%);
+          }
         }
+
+
       `}</style>
 
       {/* PRINT DIALOG (overlay) – only on screen, hidden in PDF */}
@@ -1626,10 +1689,17 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                       className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs"
                       value={windowDays}
                       onChange={(e) => {
-                       setReportRangeMode("lastNDays");   // return to rolling preset mode
-                       setWindowDays(Number(e.target.value));
+                        const newDays = Number(e.target.value);
+
+                        setReportRangeMode("lastNDays"); // keep this exactly as-is
+                        setWindowDays(newDays);
+
+                        // 🔓 RELEASE custom override
+                        setRangeMode("preset");
+                        setAppliedStart(null);
+                        setAppliedEnd(null);
                       }}
-                    >
+                     >
                       {DAY_OPTIONS.map((days) => (
                         <option key={days} value={days}>
                           Last {days} days
@@ -2212,15 +2282,20 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                 {categories.map((cat) => {
                   const budget = categoryBudgets[cat.name] ?? 0;
                   const spent = expenseByCategory[cat.name] ?? 0;
-                  const pct =
-                    budget > 0
-                      ? Math.min(100, Math.round((spent / budget) * 100))
-                      : 0;
+                  const pct = budget > 0 ? spent / budget : 0;
+                  const status =
+                    budget <= 0 ? "none" :
+                    pct > 1 ? "over" :
+                    pct >= 0.8 ? "near" :
+                    "ok";
 
                   return (
-                    <div key={cat.name} className="space-y-1">
+                     <div key={cat.name} className="space-y-1">
                       <div className="flex items-center justify-between text-[11px]">
-                        <span className="truncate pr-2">{cat.name}</span>
+                        <span className="truncate pr-2 flex items-center gap-1">
+                          <BudgetStatusIcon status={status} />
+                          {cat.name}
+                        </span>
                         <input
                           type="number"
                           min="0"
@@ -2447,6 +2522,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                   <tr key={catName} className="border-b last:border-0">
                     <td className="py-1">{catName}</td>
                     <td className="py-1 text-right">{formatCurrency(amount)}</td>
+                  
                   </tr>
                 ))}
               </tbody>
@@ -2537,14 +2613,14 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
             
            </div>
   </section>
+<section className="no-print">
 
       {/* ALL CATEGORIES (PRINT STYLE) */}
       <section className="print-card p-3 mb-4">
         <h2 className="font-semibold mb-2">Categories</h2>
         <p className="mb-2 text-[11px]">
-          All categories currently available in your FlowTrack workspace.
+         All categories currently available in your FlowTrack workspace.
         </p>
-
         <table className="w-full text-[11px] border-collapse">
           <thead>
             <tr className="border-b">
@@ -2563,6 +2639,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
             ))}
           </tbody>
         </table>
+      </section>
       </section>
 </div>
 
