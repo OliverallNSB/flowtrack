@@ -124,10 +124,6 @@ function getSpendingRatio(income: number, expenses: number) {
 
 type ReportRangeMode = "thisMonth" | "lastNDays" | "current" | "custom" | "lastMonth";
 
-function handlePrintReport() {
-  // For now just print the whole page
-  window.print();
-}
 
 function BudgetStatusIcon({ status }: { status: "ok" | "near" | "over" | "none" }) {
   if (status === "none") return null;
@@ -164,6 +160,57 @@ function BudgetStatusIcon({ status }: { status: "ok" | "near" | "over" | "none" 
         );
       }
 
+    function isProUser(plan?: string | null) {
+      return plan === "pro";
+      }
+
+    function requirePro(isPro: boolean, onBlocked: () => void) {
+      if (isPro) return true;
+      onBlocked();
+      return false;
+    }
+
+      function UpgradeModal({
+            open,
+            onClose,
+          }: {
+            open: boolean;
+            onClose: () => void;
+          }) {
+            if (!open) return null;
+
+            return (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+                <div className="w-full max-w-md rounded-xl bg-slate-950 border border-slate-800 p-6">
+                  <h2 className="text-lg font-semibold mb-2">Unlock Pro</h2>
+                  <p className="text-sm text-slate-400 mb-4">
+                    Get custom date ranges, advanced PDF reports, and up to 120 days of history.
+                  </p>
+
+                  <div className="flex justify-end gap-3">
+                    <button
+                      onClick={onClose}
+                      className="px-4 py-2 text-sm rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800"
+                    >
+                      Maybe later
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        onClose();
+                        // Stripe will go here in Step 2
+                        alert("Stripe checkout coming next 🚀");
+                      }}
+                      className="px-4 py-2 text-sm rounded-md bg-emerald-600 text-black hover:bg-emerald-500"
+                    >
+                      Upgrade to Pro
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -175,15 +222,35 @@ export default function DashboardPage() {
 
   const [profile, setProfile] = useState<any>(null);
   
-   // normalize plan once
-  const plan = (profile?.plan ?? "").toString().trim().toLowerCase();
-  const isPro = plan === "pro";
+  const isPro = isProUser(profile?.plan);
 
   // ISO date string YYYY-MM-DD for Supabase filter
 
   // ---- TIME WINDOW (FREE vs PRO) ----
   const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90, 120] : [7, 14, 30];
   const [windowDays, setWindowDays] = useState<number>(isPro ? 90 : 30);
+
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const [upgradeReason, setUpgradeReason] = useState<string | null>(null);
+
+    function openUpgrade(reason?: string) {
+    setUpgradeReason(reason ?? null);
+    setShowUpgrade(true);
+    }
+
+    function closeUpgrade() {
+      setShowUpgrade(false);
+      setUpgradeReason(null);
+    }
+
+    function handlePrintReport() {
+      if (!isPro) {
+        openUpgrade("Print / PDF reports are Pro.");
+        return;
+      }
+      window.print();
+    }
+
 
   // ---- USER & DATA STATE ----
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -413,6 +480,10 @@ async function handleApplyCustomRange() {
   if (!customStart || !customEnd) {
     alert("Please choose both start and end dates.");
     return;
+  }
+  if (!isPro) {
+  openUpgrade("Custom date ranges are Pro.");
+  return;
   }
 
   // auto-swap if user picked backwards
@@ -1128,7 +1199,73 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
 
   // ---- MAIN LAYOUT ----
   return (
-  
+  <>
+    {showUpgrade && (
+  <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+    <div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-950 text-slate-100 shadow-2xl">
+      <div className="p-5 border-b border-slate-800">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold">Unlock Pro</h3>
+            <p className="text-sm text-slate-400 mt-1">
+              {upgradeReason ?? "This feature is available on Pro."}
+            </p>
+          </div>
+          <button
+            onClick={closeUpgrade}
+            className="rounded-md px-2 py-1 text-slate-300 hover:bg-slate-800"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <div className="p-5 space-y-4">
+        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="font-semibold">Pro Plan</div>
+              <div className="text-xs text-slate-400">
+                120-day timeline • Custom ranges • PDF reports • Budgets insights
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-xl font-bold">$9</div>
+              <div className="text-xs text-slate-400">per month</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={closeUpgrade}
+            className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm hover:bg-slate-800"
+          >
+            Not now
+          </button>
+
+          <button
+            onClick={() => {
+              // Step 3 will replace this with Stripe checkout
+              alert("Next step: connect Stripe checkout.");
+            }}
+            className="flex-1 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
+          >
+            Unlock Pro
+          </button>
+        </div>
+
+        <p className="text-[11px] text-slate-500">
+          You can keep using Free mode (Last 30 days). Upgrade anytime.
+        </p>
+      </div>
+    </div>
+  </div>
+)
+}
+
+
     <main className="screen-only min-h-screen bg-slate-950 text-slate-100">
       
       {/* Print styling: keep dark dashboard look in PDF */}
@@ -1634,9 +1771,10 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                 type="button"
                 className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-900 text-slate-300 text-[11px]"
               >
-                Settings
+               
               </button>
             </div>
+
           </div>
 
           {/* LEFT SIDEBAR PLAN LABEL */}
@@ -1679,6 +1817,18 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               >
                 {isPro ? "PRO" : "FREE"}
               </span>
+              
+                {!isPro && (
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    Want custom ranges & up to 120 days?{" "}
+                    <button
+                      onClick={() => openUpgrade("Custom date ranges and extended history are Pro features.")}
+                      className="text-emerald-400 hover:underline"
+                    >
+                      Upgrade to Pro
+                    </button>
+                  </div>
+                )}
 
               {/* Time selector + custom range (Pro) */}
                 <div className="flex items-center gap-3">
@@ -1690,6 +1840,12 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                       value={windowDays}
                       onChange={(e) => {
                         const newDays = Number(e.target.value);
+                        
+                        // 🔒 Free plan guard
+                        if (!isPro && newDays > 30) {
+                        openUpgrade("Time ranges above 30 days are Pro.");
+                        return;
+                         }
 
                         setReportRangeMode("lastNDays"); // keep this exactly as-is
                         setWindowDays(newDays);
@@ -2646,5 +2802,6 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
 {/* =========== END PRINT-ONLY REPORT =========== */}
 
 </main>
+</>
 );
 }
