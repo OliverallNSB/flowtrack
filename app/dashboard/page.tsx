@@ -182,7 +182,7 @@ function BudgetStatusIcon({ status }: { status: "ok" | "near" | "over" | "none" 
             return (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
                 <div className="w-full max-w-md rounded-xl bg-slate-950 border border-slate-800 p-6">
-                  <h2 className="text-lg font-semibold mb-2">Unlock Pro</h2>
+                  <h2 className="text-lg font-semibold mb-2"> Pro Pro</h2>
                   <p className="text-sm text-slate-400 mb-4">
                     Get custom date ranges, advanced PDF reports, and up to 120 days of history.
                   </p>
@@ -220,11 +220,11 @@ export default function DashboardPage() {
   const incomeScrollRef = useRef<HTMLDivElement | null>(null);
   const expenseScrollRef = useRef<HTMLDivElement | null>(null);
 
-  const [profile, setProfile] = useState<any>(null);
+  const [profile, setProfile] = useState<{ plan: string; category_order: string[] } | null>(null);
+  const isPro = (profile?.plan ?? "free").toString().trim().toLowerCase() === "pro";
+ 
   
-  const isPro = isProUser(profile?.plan);
-
-  // ISO date string YYYY-MM-DD for Supabase filter
+    // ISO date string YYYY-MM-DD for Supabase filter
 
   // ---- TIME WINDOW (FREE vs PRO) ----
   const DAY_OPTIONS = isPro ? [7, 14, 30, 60, 90, 120] : [7, 14, 30];
@@ -243,6 +243,76 @@ export default function DashboardPage() {
       setUpgradeReason(null);
     }
 
+    <div className=""></div>
+
+        async function loadProfile(userId: string) {
+          const { data, error } = await supabase
+            .from("profiles")
+            .select("plan, category_order")
+            .eq("id", userId)
+            .maybeSingle();
+
+          if (error) {
+            console.error("Error loading profile:", error);
+            setProfile({ plan: "free", category_order: [] });
+            return;
+          }
+
+          if (!data) {
+            // create missing profile
+            const { error: insertErr } = await supabase
+              .from("profiles")
+              .insert({ id: userId, plan: "free", category_order: [] });
+
+            if (insertErr) {
+              console.error("Error creating profile:", insertErr);
+            }
+
+            setProfile({ plan: "free", category_order: [] });
+            return;
+          }
+
+          setProfile({
+            plan: (data.plan ?? "free").toString().toLowerCase(),
+            category_order: data.category_order ?? [],
+          });
+        }
+    
+async function handleUpgrade() {
+  
+  if (!userId || !userEmail) {
+    alert("Missing user session. Please log out and log in again.");
+    return;
+  }
+
+  const res = await fetch("/api/stripe/checkout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, email: userEmail }),
+  });
+
+  let data: any = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    
+  }
+
+    if (!res.ok) {
+    alert(data?.error ?? `Checkout failed (status ${res.status})`);
+    return;
+  }
+
+  if (data?.url) {
+    
+    window.location.href = data.url;
+  } else {
+    alert("Checkout failed: missing session url");
+  }
+}
+
+
+          
     function handlePrintReport() {
       if (!isPro) {
         openUpgrade("Print / PDF reports are Pro.");
@@ -403,6 +473,15 @@ function moveCategoryByDrag(dragName: string, dropName: string, type: "income" |
   }
 }
 
+useEffect(() => {
+  if (authLoading) return;
+  if (!user?.id) return;
+
+  setUserId(user.id);
+  setUserEmail(user.email ?? null);
+}, [authLoading, user?.id]);
+
+
 // ---- PICK WHICH TRANSACTIONS GO INTO THE PDF REPORT ----
 
 useEffect(() => {
@@ -414,6 +493,19 @@ useEffect(() => {
   });
 }, [isPro]);
 
+useEffect(() => {
+  if (!user?.id) return;
+
+  const upgraded = new URLSearchParams(window.location.search).get("upgraded");
+  if (upgraded === "1") {
+    loadProfile(user.id);
+
+    // optional: clean the URL so it doesn't keep re-triggering
+    const url = new URL(window.location.href);
+    url.searchParams.delete("upgraded");
+    window.history.replaceState({}, "", url.toString());
+  }
+}, [user?.id]);
 
 function getReportTransactions(all: Transaction[]): Transaction[] {
   // helpers
@@ -764,13 +856,7 @@ async function handleAddCategoryEntry(e: FormEvent, categoryName: string) {
         }
               
       setQuickSaving(true);
-        console.log("Quick Add submit", {
-          quickCategory,
-          amountNumber,
-          quickDate,
-          quickDescription,
-          });
-
+        
     try {
       const { data: insertedRows, error: insertError } = await supabase
         .from("transactions")
@@ -1059,27 +1145,12 @@ useEffect(() => {
   setUserEmail(user.email ?? null);
   setUserId(user.id);
 
-  // capture the id after we've confirmed user exists
   const userId = user.id;
 
-  // NEW: load profile (plan) from Supabase
-  async function loadProfile() {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("plan")
-      .eq("id", userId)   // <-- use userId here
-      .single();
 
-    if (error) {
-      console.error("Error loading profile:", error);
-      return;
-    }
-
-    setProfile(data);
-  }
-
-  loadProfile();
+  loadProfile(user.id);
 }, [authLoading, user]);
+
 
 // ---- LOAD CATEGORIES FOR THIS USER ----
 useEffect(() => {
@@ -1246,14 +1317,13 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
           </button>
 
           <button
-            onClick={() => {
-              // Step 3 will replace this with Stripe checkout
-              alert("Next step: connect Stripe checkout.");
-            }}
-            className="flex-1 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
+
+            onClick={handleUpgrade}
+            className="flex-1 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
           >
             Unlock Pro
           </button>
+
         </div>
 
         <p className="text-[11px] text-slate-500">
@@ -1817,7 +1887,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               >
                 {isPro ? "PRO" : "FREE"}
               </span>
-              
+
                 {!isPro && (
                   <div className="mt-1 text-[11px] text-slate-400">
                     Want custom ranges & up to 120 days?{" "}
@@ -2314,7 +2384,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
           <div className="px-4 py-4 border-b border-slate-800">
             <h2 className="text-sm font-semibold">Preliminary report</h2>
             <p className="text-[11px] text-slate-400">
-              Snapshot of your {windowDays}.
+              Snapshot of your {activeRangeLabel}.
             </p>
           </div>
 
@@ -2338,7 +2408,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                 .
               </p>
               <p className="mt-1 text-slate-400">
-                Based on your net result over the {windowDays}:
+                Based on your net result over the {activeRangeLabel}:
               </p>
               <ul className="list-disc list-inside mt-1 space-y-1 text-slate-400">
                 <li>Income: {formatCurrency(income)}</li>
@@ -2374,7 +2444,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
 
                   <p className="text-slate-400">
                     This is how much of your income you&apos;re keeping after
-                    expenses in the last {windowDays} days.
+                    expenses in the last {activeRangeLabel} days.
                   </p>
 
                   <p className="mt-1 text-slate-400">
@@ -2402,7 +2472,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               ) : (
                 <>
                   <p className="text-slate-400 mb-2">
-                    Biggest expense categories in the last {windowDays} days:
+                    Biggest expense categories in the last {activeRangeLabel} days:
                   </p>
                   <ul className="space-y-1">
                     {topCategories.map(([catName, amount]) => (
@@ -2520,7 +2590,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                   <p className="mt-1 text-slate-400">
                     Tracking the last{" "}
                     <span className="font-semibold text-emerald-300">
-                      {windowDays} days
+                      {activeRangeLabel} days
                     </span>{" "}
                     of activity with advanced dashboards.
                   </p>
@@ -2551,7 +2621,7 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
             {/* PIE CHART CARD */}
             <div className="bg-slate-900 rounded-lg border border-slate-800 p-4 flex flex-col items-center mt-2">
               <div className="text-[11px] text-slate-400 mb-2">
-                Spending vs income {windowDays}
+                Spending vs income {activeRangeLabel}
               </div>
 
               <div className="relative flex items-center justify-center mb-3">
