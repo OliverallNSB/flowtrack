@@ -360,6 +360,9 @@ async function handleUpgrade() {
   // ---- QUICK ADD BAR (CENTER TOP) ----
   const [quickCategory, setQuickCategory] = useState<string>("");
   const [quickAmount, setQuickAmount] = useState("");
+  const [quickAddStatus, setQuickAddStatus] =
+    useState<"idle" | "added" | "error">("idle");
+
   const [quickDate, setQuickDate] = useState("");
   const [quickDescription, setQuickDescription] = useState("");
   const [quickSaving, setQuickSaving] = useState(false);
@@ -801,8 +804,6 @@ async function handleAddCategoryEntry(e: FormEvent, categoryName: string) {
   setExpandedCategory(null);
 }
 
-
-
   // ---- QUICK ADD ----
   async function handleQuickAdd(e: FormEvent) {
     e.preventDefault();
@@ -819,45 +820,38 @@ async function handleAddCategoryEntry(e: FormEvent, categoryName: string) {
     }
 
     const cat = categories.find((c) => c.name === quickCategory);
-
-      if (!cat) {
-        console.warn("Quick Add: category not found", {
-          quickCategory,
-          categories: categories.map((c) => c.name),
-        });
-
-        if (categories.length > 0) {
-          setQuickCategory(categories[0].name);
-        }
-
-        setErrorMessage(
-          "Category not found for Quick Add. Please pick a category again."
-        );
-        return;
+    if (!cat) {
+      // Optional: auto-select first category if something got out of sync
+      if (categories.length > 0) {
+        setQuickCategory(categories[0].name);
       }
+      setErrorMessage("Category not found for Quick Add. Please pick a category again.");
+      return;
+    }
 
-      if (!quickAmount || !quickDate) {
-        setErrorMessage("Please fill amount and date.");
-        return;
-      }
-      
-      const amountNumber = Number(quickAmount);
-      if (Number.isNaN(amountNumber) || amountNumber <= 0) {
-        setErrorMessage("Amount must be a positive number.");
-        return;
-      }
+    if (!quickAmount || !quickDate) {
+      setErrorMessage("Please fill amount and date.");
+      return;
+    }
 
-        const chosen = new Date(quickDate);
-        const periodStartDate = new Date(periodStart);
+    const amountNumber = Number(quickAmount);
+    if (Number.isNaN(amountNumber) || amountNumber <= 0) {
+      setErrorMessage("Amount must be a positive number.");
+      return;
+    }
 
-        if (chosen < periodStartDate || chosen > today) {
-          setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
-          return;
-        }
-              
-      setQuickSaving(true);
-        
+    const chosen = new Date(quickDate);
+    const periodStartDate = new Date(periodStart);
+
+    if (chosen < periodStartDate || chosen > today) {
+      setErrorMessage(`Only last ${windowDays} days are allowed for your plan.`);
+      return;
+    }
+
+    setQuickSaving(true);
+
     try {
+      // 1) INSERT (single insert, return inserted row id)
       const { data: insertedRows, error: insertError } = await supabase
         .from("transactions")
         .insert({
@@ -868,19 +862,23 @@ async function handleAddCategoryEntry(e: FormEvent, categoryName: string) {
           category: cat.name,
           description: quickDescription || null,
         })
-        .select();
+        .select("id")
+        .limit(1);
 
       if (insertError) {
-        console.error("Quick Add insert error:", insertError);
+        setQuickAddStatus("error");
+        setTimeout(() => setQuickAddStatus("idle"), 2000);
         setErrorMessage(insertError.message);
         return;
       }
 
-      let newId: string | null = null;
-      if (insertedRows && insertedRows.length > 0) {
-        newId = insertedRows[0].id as string;
-      }
+      // ✅ SUCCESS UX
+      setQuickAddStatus("added");
+      setTimeout(() => setQuickAddStatus("idle"), 1200);
 
+      const newId = insertedRows?.[0]?.id ?? null;
+
+      // 2) RELOAD transactions for current period
       const { data, error: txError } = await supabase
         .from("transactions")
         .select("*")
@@ -889,16 +887,20 @@ async function handleAddCategoryEntry(e: FormEvent, categoryName: string) {
         .order("date", { ascending: false });
 
       if (txError) {
-        console.error("Quick Add reload error:", txError);
+        setQuickAddStatus("error");
+        setTimeout(() => setQuickAddStatus("idle"), 2000);
         setErrorMessage(txError.message);
-      } else {
-        setTransactions((data ?? []) as Transaction[]);
+        return;
       }
 
+      setTransactions((data ?? []) as Transaction[]);
+
+      // 3) Highlight new tx if we have id
       if (newId) {
         setHighlightedTxId(newId);
       }
 
+      // 4) Clear fields
       setQuickAmount("");
       setQuickDescription("");
       setQuickDate(todayStr);
@@ -906,7 +908,10 @@ async function handleAddCategoryEntry(e: FormEvent, categoryName: string) {
     } finally {
       setQuickSaving(false);
     }
- }
+  }
+
+
+
 
     function startEdit(t: Transaction) {
       setEditingId(t.id);
@@ -2071,6 +2076,13 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               >
                 {quickSaving ? "Adding..." : "Add"}
               </button>
+              {quickAddStatus === "added" && (
+                    <span className="text-xs text-emerald-400 ml-2">Added ✓</span>
+                  )}
+                  {quickAddStatus === "error" && (
+                    <span className="text-xs text-red-400 ml-2">Couldn’t add</span>
+                  )}
+
             </form>
           </div>
 
@@ -2094,6 +2106,12 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                   <p className="text-xl font-semibold">
                     {formatCurrency(income)}
                   </p>
+                  {income === 0 && (
+                    <div className="mt-1 text-xs text-slate-400">
+                      No income yet — add your first income entry to get started.
+                    </div>
+                  )}
+
                 </div>
               </div>
 
@@ -2109,6 +2127,14 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
                   <p className="text-xl font-semibold">
                     {formatCurrency(expenses)}
                   </p>
+
+                  {expenses === 0 && (
+                    <div className="mt-1 text-xs text-slate-400">
+                      No expenses recorded — track spending to see where your money goes.
+                    </div>
+                  )}
+
+
                 </div>
               </div>
 
@@ -2124,6 +2150,9 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
 
                   <p className="text-xl font-semibold">
                     {formatCurrency(net)}
+
+
+
                   </p>
                   <p className="mt-1 text-[11px] text-slate-400">
                     Status:{" "}
