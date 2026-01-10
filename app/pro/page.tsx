@@ -5,10 +5,10 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/context/AuthContext";
 
 export default function ProPage() {
-  const { user, profile, loading } = useAuth();
+  const { user, loading } = useAuth();
   const router = useRouter();
   
-  const isPro = profile?.plan === "pro";
+  const isPro = true;
   const [loadingCheckout, setLoadingCheckout] = useState(false);
 
 async function handleUpgradeClick() {
