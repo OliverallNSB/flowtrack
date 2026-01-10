@@ -4,10 +4,11 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useState,
   ReactNode,
 } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseclient";
 
@@ -21,18 +22,33 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
 });
 
+const PUBLIC_ROUTES = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/pro",
+]);
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
+
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const isPublicRoute = useMemo(() => {
+    if (!pathname) return true;
+    // also treat any auth callback routes as public if you ever add them
+    if (pathname.startsWith("/auth")) return true;
+    return PUBLIC_ROUTES.has(pathname);
+  }, [pathname]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadSession() {
       setLoading(true);
-
-      const { data, error } = await supabase.auth.getSession();
+      const { data } = await supabase.auth.getSession();
 
       if (!cancelled) {
         setUser(data?.session?.user ?? null);
@@ -54,14 +70,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // 🔒 Redirect ONLY after loading finishes
+  // 🔒 Redirect ONLY on protected routes, and only after loading finishes
   useEffect(() => {
     if (loading) return;
+    if (isPublicRoute) return;
 
     if (!user) {
       router.push("/login");
     }
-  }, [loading, user, router]);
+  }, [loading, user, router, isPublicRoute]);
 
   return (
     <AuthContext.Provider value={{ user, loading }}>
