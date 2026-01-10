@@ -1,8 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
 
-// These values come from your Supabase project
-// (same ones you had in .env.local)
-const supabaseUrl = "https://kfxrgchdltnmpimdnirr.supabase.co";
-const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtmeHJnY2hkbHRubXBpbWRuaXJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxMjAwNTksImV4cCI6MjA3OTY5NjA1OX0.IvffSopPLbWMU0W_b2QcBAv0BiT6LNu1W-iMugwQDlI";
+// Read from env (works on Vercel + local)
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.SUPABASE_URL;
+
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_ANON_KEY;
+
+if (!supabaseUrl) throw new Error("supabaseUrl is required.");
+if (!supabaseAnonKey) throw new Error("supabaseAnonKey is required.");
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
