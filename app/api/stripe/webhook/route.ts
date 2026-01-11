@@ -40,26 +40,52 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ✅ Upgrade on checkout completion
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object as Stripe.Checkout.Session;
+ // ✅ Upgrade on checkout completion
+if (event.type === "checkout.session.completed") {
+  const session = event.data.object as Stripe.Checkout.Session;
 
-    const userId = session.metadata?.userId;
-    if (!userId) {
-      return NextResponse.json({ received: true, missingUserId: true });
-    }
-
-    const { error } = await supabaseAdmin
-      .from("profiles")
-      .upsert({ id: userId, plan: "pro" }, { onConflict: "id" });
-
-    if (error) {
-      return NextResponse.json(
-        { error: `Supabase update failed: ${error.message}` },
-        { status: 500 }
-      );
-    }
+  const userId = session.metadata?.userId;
+  if (!userId) {
+    return NextResponse.json({ received: true, missingUserId: true });
   }
 
-  return NextResponse.json({ received: true });
+  // ✅ Extract Stripe IDs safely (string or expanded object)
+  const customerId =
+    typeof session.customer === "string"
+      ? session.customer
+      : session.customer?.id ?? null;
+
+  const subscriptionId =
+    typeof session.subscription === "string"
+      ? session.subscription
+      : session.subscription?.id ?? null;
+
+  const { error } = await supabaseAdmin
+    .from("profiles")
+    .upsert(
+      {
+        id: userId,
+        plan: "pro",
+        stripe_customer_id: customerId,
+        stripe_subscription_id: subscriptionId,
+      },
+      { onConflict: "id" }
+    );
+
+  if (error) {
+    return NextResponse.json(
+      { error: `Supabase update failed: ${error.message}` },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json({
+    received: true,
+    updated: true,
+    userId,
+    customerId,
+    subscriptionId,
+  });
+}
+
 }
