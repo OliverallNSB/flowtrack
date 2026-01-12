@@ -88,4 +88,32 @@ if (event.type === "checkout.session.completed") {
   });
 }
 
+// ✅ Downgrade to free when subscription is canceled
+if (event.type === "customer.subscription.deleted") {
+  const sub = event.data.object as Stripe.Subscription;
+
+  const userId = sub.metadata?.userId;
+  if (!userId) {
+    return NextResponse.json({ received: true, missingUserId: true });
+  }
+
+  const { error } = await supabaseAdmin
+    .from("profiles")
+    .update({
+      plan: "free",
+      stripe_subscription_id: null,
+    })
+    .eq("id", userId);
+
+  if (error) {
+    return NextResponse.json(
+      { error: `Supabase downgrade failed: ${error.message}` },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json({ received: true, downgraded: true, userId });
+}
+
+
 }
