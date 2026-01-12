@@ -4,6 +4,16 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
+function getSubscriptionIdFromInvoice(invoice: any): string | null {
+  const sub = invoice?.subscription;
+  if (!sub) return null;
+  if (typeof sub === "string") return sub;
+  if (typeof sub === "object" && typeof sub.id === "string") return sub.id;
+  return null;
+}
+
+
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 const supabaseAdmin = createClient(
@@ -113,6 +123,77 @@ if (event.type === "customer.subscription.deleted") {
   }
 
   return NextResponse.json({ received: true, downgraded: true, userId });
+}
+
+// ✅ Start grace window on payment failure (3 days)
+if (event.type === "invoice.payment_failed") {
+  const invoice = event.data.object as Stripe.Invoice;
+
+  const subscriptionId = getSubscriptionIdFromInvoice(invoice);
+  if (!subscriptionId) return NextResponse.json({ received: true });
+
+  const sub = await stripe.subscriptions.retrieve(subscriptionId);
+
+  const userId = sub.metadata?.userId;
+  if (!userId) {
+    return NextResponse.json({ received: true, missingUserId: true });
+  }
+
+  const graceUntil = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { error } = await supabaseAdmin
+    .from("profiles")
+    .update({
+      stripe_subscription_id: sub.id,
+      stripe_subscription_status: sub.status,
+      pro_grace_until: graceUntil,
+    })
+    .eq("id", userId);
+
+  if (error) {
+    return NextResponse.json(
+      { error: `Grace update failed: ${error.message}` },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json({ received: true, graceUntil });
+}
+
+
+
+// ✅ Clear grace window when payment succeeds
+if (event.type === "invoice.payment_succeeded") {
+  const invoice = event.data.object as Stripe.Invoice;
+
+  const subscriptionId = getSubscriptionIdFromInvoice(invoice);
+  if (!subscriptionId) return NextResponse.json({ received: true });
+
+  const sub = await stripe.subscriptions.retrieve(subscriptionId);
+
+  const userId = sub.metadata?.userId;
+  if (!userId) {
+    return NextResponse.json({ received: true, missingUserId: true });
+  }
+
+  const { error } = await supabaseAdmin
+    .from("profiles")
+    .update({
+      plan: "pro",
+      stripe_subscription_id: sub.id,
+      stripe_subscription_status: sub.status,
+      pro_grace_until: null,
+    })
+    .eq("id", userId);
+
+  if (error) {
+    return NextResponse.json(
+      { error: `Recovery update failed: ${error.message}` },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json({ received: true, recovered: true });
 }
 
 
