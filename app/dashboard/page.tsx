@@ -229,20 +229,22 @@ export default function DashboardPage() {
 
 
   const [profileLoading, setProfileLoading] = useState(true);
+  
   const plan = (profile?.plan ?? "free").toString().trim().toLowerCase();
   
   const subStatus: string | null = profile?.stripe_subscription_status ?? null;
   const graceUntilRaw: string | null = profile?.pro_grace_until ?? null;
 
   const graceUntil = graceUntilRaw ? new Date(graceUntilRaw) : null;
-
-  
   const now = new Date();
 
   const inGrace = graceUntil ? now < graceUntil : false;
   const paidOk = subStatus === "active" || subStatus === "trialing";
 
-  const isPro = plan === "pro" && (paidOk || inGrace);
+  // ✅ if user is "pro" but we have no billing fields yet, treat as pro
+  const legacyPro = subStatus === null && graceUntilRaw === null;
+
+  const isPro = plan === "pro" && (paidOk || inGrace || legacyPro);
 
  
   
