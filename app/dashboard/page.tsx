@@ -220,8 +220,30 @@ export default function DashboardPage() {
   const incomeScrollRef = useRef<HTMLDivElement | null>(null);
   const expenseScrollRef = useRef<HTMLDivElement | null>(null);
 
-  const [profile, setProfile] = useState<{ plan: string; category_order: string[] } | null>(null);
-  const isPro = (profile?.plan ?? "free").toString().trim().toLowerCase() === "pro";
+  const [profile, setProfile] = useState<{
+  plan: string;
+  category_order: string[];
+  stripe_subscription_status?: string | null;
+  pro_grace_until?: string | null;
+  } | null>(null);
+
+
+  const [profileLoading, setProfileLoading] = useState(true);
+  const plan = (profile?.plan ?? "free").toString().trim().toLowerCase();
+  
+  const subStatus: string | null = profile?.stripe_subscription_status ?? null;
+  const graceUntilRaw: string | null = profile?.pro_grace_until ?? null;
+
+  const graceUntil = graceUntilRaw ? new Date(graceUntilRaw) : null;
+
+  
+  const now = new Date();
+
+  const inGrace = graceUntil ? now < graceUntil : false;
+  const paidOk = subStatus === "active" || subStatus === "trialing";
+
+  const isPro = plan === "pro" && (paidOk || inGrace);
+
  
   
     // ISO date string YYYY-MM-DD for Supabase filter
@@ -245,71 +267,78 @@ export default function DashboardPage() {
 
     <div className=""></div>
 
-        async function loadProfile(userId: string) {
-          const { data, error } = await supabase
-            .from("profiles")
-            .select("plan, category_order")
-            .eq("id", userId)
-            .maybeSingle();
+      async function loadProfile(userId: string) {
+        setProfileLoading(true);
 
-          if (error) {
-            console.error("Error loading profile:", error);
-            setProfile({ plan: "free", category_order: [] });
-            return;
-          }
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("plan, category_order, pro_grace_until, stripe_subscription_status")
+          .eq("id", userId)
+          .maybeSingle();
 
-          if (!data) {
-            // create missing profile
-            const { error: insertErr } = await supabase
-              .from("profiles")
-              .insert({ id: userId, plan: "free", category_order: [] });
-
-            if (insertErr) {
-              console.error("Error creating profile:", insertErr);
-            }
-
-            setProfile({ plan: "free", category_order: [] });
-            return;
-          }
-
-          setProfile({
-            plan: (data.plan ?? "free").toString().toLowerCase(),
-            category_order: data.category_order ?? [],
-          });
+        if (error) {
+          console.error("Error loading profile:", error);
+          setProfile({ plan: "free", category_order: [] });
+          setProfileLoading(false);
+          return;
         }
+
+        if (!data) {
+          // create missing profile
+          const { error: insertErr } = await supabase
+            .from("profiles")
+            .insert({ id: userId, plan: "free", category_order: [] });
+
+          if (insertErr) {
+            console.error("Error creating profile:", insertErr);
+          }
+
+          setProfile({ plan: "free", category_order: [] });
+          setProfileLoading(false);
+          return;
+        }
+
+        setProfile({
+          plan: (data.plan ?? "free").toString().toLowerCase(),
+          category_order: data.category_order ?? [],
+        });
+
+        setProfileLoading(false);
+      }
+
     
-async function handleUpgrade() {
-  
-  if (!userId || !userEmail) {
-    alert("Missing user session. Please log out and log in again.");
-    return;
-  }
+      async function handleUpgrade() {
+        
+        if (!userId || !userEmail) {
+          alert("Missing user session. Please log out and log in again.");
+          return;
+        }
 
-  const res = await fetch("/api/stripe/checkout", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, email: userEmail }),
-  });
+        const res = await fetch("/api/stripe/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId, email: userEmail }),
+        });
 
-  let data: any = null;
-  try {
-    data = await res.json();
-  } catch (e) {
-    
-  }
+        let data: any = null;
+        try {
+          data = await res.json();
+        } catch (e) {
+          
+        }
 
-    if (!res.ok) {
-    alert(data?.error ?? `Checkout failed (status ${res.status})`);
-    return;
-  }
+          if (!res.ok) {
+          alert(data?.error ?? `Checkout failed (status ${res.status})`);
+          return;
+        }
 
-  if (data?.url) {
-    
-    window.location.href = data.url;
-  } else {
-    alert("Checkout failed: missing session url");
-  }
-}
+        if (data?.url) {
+          
+          window.location.href = data.url;
+        } else {
+          alert("Checkout failed: missing session url");
+        }
+      }
 
 
           
