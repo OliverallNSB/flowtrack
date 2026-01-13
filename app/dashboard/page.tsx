@@ -5,6 +5,8 @@ import { useEffect, useState, FormEvent, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseclient";
 import { useAuth } from "@/app/context/AuthContext";
+import { PRICING } from "@/lib/pricing";
+
 
 type TransactionType = "income" | "expense";
 
@@ -1338,8 +1340,9 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
               </div>
             </div>
             <div className="text-right">
-              <div className="text-xl font-bold">$9</div>
-              <div className="text-xs text-slate-400">per month</div>
+              <div className="text-xl font-bold">{PRICING.monthly.label}</div>
+
+              <div className="text-xs text-slate-400">per month. Cancel it anytime.</div>
             </div>
           </div>
         </div>
@@ -1884,19 +1887,35 @@ function applySavedOrder(list: Category[], savedOrder: string[] | null) {
           </div>
 
           {/* LEFT SIDEBAR PLAN LABEL */}
-          <div className="px-3 py-3 border-t border-slate-800 text-[11px] text-slate-400">
-            <p>
-              Plan:{" "}
-              <span className={isPro ? "text-amber-300 font-semibold" : ""}>
-                {isPro ? "Pro" : "Free"}
-              </span>
-            </p>
-            <p className="mt-1 text-emerald-400">
-              {isPro
-                ? "Pro: tracking the last {windowDays}. Reports coming soon."
-                : "Free: tracking the last ${windowDays} days. Upgrade to Pro for 90 days & reports."}
-            </p>
-          </div>
+   <div className="mt-4 space-y-1">
+  <div className="text-slate-300">
+    Plan: <span className="font-semibold text-yellow-300">{isPro ? "Pro" : "Free"}</span>
+  </div>
+
+  {isPro ? (
+    <p className="text-emerald-300">
+      Pro: tracking the last <span className="font-semibold">{windowDays}</span> days.
+      <br />
+      Reports coming soon.
+    </p>
+  ) : (
+    <p className="text-slate-300">
+      Free: tracking up to <span className="font-semibold">{windowDays}</span> days.
+      Upgrade to unlock custom ranges and extended history.
+    </p>
+  )}
+
+      <div className="mt-3">
+      <a
+      href="mailto:support@flowtrack.app?subject=FlowTrack Support"
+      className="text-sm text-slate-400 hover:text-white underline"
+    >
+      Need help? Contact support
+    </a>
+
+  </div>
+</div>
+
         </aside>
 
         {/* ========================= */}
