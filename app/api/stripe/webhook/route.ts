@@ -12,8 +12,6 @@ function getSubscriptionIdFromInvoice(invoice: any): string | null {
   return null;
 }
 
-
-
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 const supabaseAdmin = createClient(
@@ -50,151 +48,194 @@ export async function POST(req: NextRequest) {
     );
   }
 
- // ✅ Upgrade on checkout completion
-if (event.type === "checkout.session.completed") {
-  const session = event.data.object as Stripe.Checkout.Session;
+  // ✅ Upgrade on checkout completion
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object as Stripe.Checkout.Session;
 
-  const userId = session.metadata?.userId;
-  if (!userId) {
-    return NextResponse.json({ received: true, missingUserId: true });
+    const userId = session.metadata?.userId;
+    if (!userId) {
+      // Don’t fail the webhook; just report missing mapping
+      return NextResponse.json({ received: true, missingUserId: true });
+    }
+
+    const customerId =
+      typeof session.customer === "string"
+        ? session.customer
+        : session.customer?.id ?? null;
+
+    const subscriptionId =
+      typeof session.subscription === "string"
+        ? session.subscription
+        : session.subscription?.id ?? null;
+
+    const { error } = await supabaseAdmin
+      .from("profiles")
+      .upsert(
+        {
+          id: userId,
+          plan: "pro",
+          stripe_customer_id: customerId,
+          stripe_subscription_id: subscriptionId,
+        },
+        { onConflict: "id" }
+      );
+
+    if (error) {
+      return NextResponse.json(
+        { error: `Supabase update failed: ${error.message}` },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      received: true,
+      updated: true,
+      userId,
+      customerId,
+      subscriptionId,
+    });
   }
 
-  // ✅ Extract Stripe IDs safely (string or expanded object)
-  const customerId =
-    typeof session.customer === "string"
-      ? session.customer
-      : session.customer?.id ?? null;
+  // ✅ Handle subscription.created so it never 500s
+  // (We don’t require userId here unless you explicitly set subscription metadata.)
+  if (event.type === "customer.subscription.created") {
+    const sub = event.data.object as Stripe.Subscription;
 
-  const subscriptionId =
-    typeof session.subscription === "string"
-      ? session.subscription
-      : session.subscription?.id ?? null;
+    const customerId =
+      typeof sub.customer === "string"
+        ? sub.customer
+        : sub.customer && "id" in sub.customer
+        ? sub.customer.id
+        : null;
 
-  const { error } = await supabaseAdmin
-    .from("profiles")
-    .upsert(
-      {
-        id: userId,
+    const userId = sub.metadata?.userId;
+
+    // If no userId in subscription metadata, do NOT fail.
+    // We'll rely on checkout.session.completed (which should have metadata.userId).
+    if (!userId) {
+      return NextResponse.json({ received: true, missingUserId: true });
+    }
+
+    const { error } = await supabaseAdmin
+      .from("profiles")
+      .update({
         plan: "pro",
         stripe_customer_id: customerId,
-        stripe_subscription_id: subscriptionId,
-      },
-      { onConflict: "id" }
-    );
+        stripe_subscription_id: sub.id,
+        stripe_subscription_status: sub.status,
+      })
+      .eq("id", userId);
 
-  if (error) {
-    return NextResponse.json(
-      { error: `Supabase update failed: ${error.message}` },
-      { status: 500 }
-    );
+    if (error) {
+      return NextResponse.json(
+        { error: `Supabase update failed: ${error.message}` },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ received: true, updated: true, userId });
   }
 
-  return NextResponse.json({
-    received: true,
-    updated: true,
-    userId,
-    customerId,
-    subscriptionId,
-  });
-}
+  // ✅ Downgrade to free when subscription is canceled
+  if (event.type === "customer.subscription.deleted") {
+    const sub = event.data.object as Stripe.Subscription;
 
-// ✅ Downgrade to free when subscription is canceled
-if (event.type === "customer.subscription.deleted") {
-  const sub = event.data.object as Stripe.Subscription;
+    const userId = sub.metadata?.userId;
+    if (!userId) {
+      return NextResponse.json({ received: true, missingUserId: true });
+    }
 
-  const userId = sub.metadata?.userId;
-  if (!userId) {
-    return NextResponse.json({ received: true, missingUserId: true });
+    const { error } = await supabaseAdmin
+      .from("profiles")
+      .update({
+        plan: "free",
+        stripe_subscription_id: null,
+        stripe_subscription_status: sub.status,
+        pro_grace_until: null,
+      })
+      .eq("id", userId);
+
+    if (error) {
+      return NextResponse.json(
+        { error: `Supabase downgrade failed: ${error.message}` },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ received: true, downgraded: true, userId });
   }
 
-  const { error } = await supabaseAdmin
-    .from("profiles")
-    .update({
-      plan: "free",
-      stripe_subscription_id: null,
-    })
-    .eq("id", userId);
+  // ✅ Start grace window on payment failure (3 days)
+  if (event.type === "invoice.payment_failed") {
+    const invoice = event.data.object as Stripe.Invoice;
 
-  if (error) {
-    return NextResponse.json(
-      { error: `Supabase downgrade failed: ${error.message}` },
-      { status: 500 }
-    );
+    const subscriptionId = getSubscriptionIdFromInvoice(invoice);
+    if (!subscriptionId) return NextResponse.json({ received: true });
+
+    const sub = await stripe.subscriptions.retrieve(subscriptionId);
+
+    const userId = sub.metadata?.userId;
+    if (!userId) {
+      return NextResponse.json({ received: true, missingUserId: true });
+    }
+
+    const graceUntil = new Date(
+      Date.now() + 3 * 24 * 60 * 60 * 1000
+    ).toISOString();
+
+    const { error } = await supabaseAdmin
+      .from("profiles")
+      .update({
+        stripe_subscription_id: sub.id,
+        stripe_subscription_status: sub.status,
+        pro_grace_until: graceUntil,
+      })
+      .eq("id", userId);
+
+    if (error) {
+      return NextResponse.json(
+        { error: `Grace update failed: ${error.message}` },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ received: true, graceUntil });
   }
 
-  return NextResponse.json({ received: true, downgraded: true, userId });
-}
+  // ✅ Clear grace window when payment succeeds
+  if (event.type === "invoice.payment_succeeded") {
+    const invoice = event.data.object as Stripe.Invoice;
 
-// ✅ Start grace window on payment failure (3 days)
-if (event.type === "invoice.payment_failed") {
-  const invoice = event.data.object as Stripe.Invoice;
+    const subscriptionId = getSubscriptionIdFromInvoice(invoice);
+    if (!subscriptionId) return NextResponse.json({ received: true });
 
-  const subscriptionId = getSubscriptionIdFromInvoice(invoice);
-  if (!subscriptionId) return NextResponse.json({ received: true });
+    const sub = await stripe.subscriptions.retrieve(subscriptionId);
 
-  const sub = await stripe.subscriptions.retrieve(subscriptionId);
+    const userId = sub.metadata?.userId;
+    if (!userId) {
+      return NextResponse.json({ received: true, missingUserId: true });
+    }
 
-  const userId = sub.metadata?.userId;
-  if (!userId) {
-    return NextResponse.json({ received: true, missingUserId: true });
+    const { error } = await supabaseAdmin
+      .from("profiles")
+      .update({
+        plan: "pro",
+        stripe_subscription_id: sub.id,
+        stripe_subscription_status: sub.status,
+        pro_grace_until: null,
+      })
+      .eq("id", userId);
+
+    if (error) {
+      return NextResponse.json(
+        { error: `Recovery update failed: ${error.message}` },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ received: true, recovered: true });
   }
 
-  const graceUntil = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
-
-  const { error } = await supabaseAdmin
-    .from("profiles")
-    .update({
-      stripe_subscription_id: sub.id,
-      stripe_subscription_status: sub.status,
-      pro_grace_until: graceUntil,
-    })
-    .eq("id", userId);
-
-  if (error) {
-    return NextResponse.json(
-      { error: `Grace update failed: ${error.message}` },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json({ received: true, graceUntil });
-}
-
-
-
-// ✅ Clear grace window when payment succeeds
-if (event.type === "invoice.payment_succeeded") {
-  const invoice = event.data.object as Stripe.Invoice;
-
-  const subscriptionId = getSubscriptionIdFromInvoice(invoice);
-  if (!subscriptionId) return NextResponse.json({ received: true });
-
-  const sub = await stripe.subscriptions.retrieve(subscriptionId);
-
-  const userId = sub.metadata?.userId;
-  if (!userId) {
-    return NextResponse.json({ received: true, missingUserId: true });
-  }
-
-  const { error } = await supabaseAdmin
-    .from("profiles")
-    .update({
-      plan: "pro",
-      stripe_subscription_id: sub.id,
-      stripe_subscription_status: sub.status,
-      pro_grace_until: null,
-    })
-    .eq("id", userId);
-
-  if (error) {
-    return NextResponse.json(
-      { error: `Recovery update failed: ${error.message}` },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json({ received: true, recovered: true });
-}
-
-
+  // ✅ Always return 200 so Stripe stops retrying for unhandled events
+  return NextResponse.json({ received: true, type: event.type });
 }
